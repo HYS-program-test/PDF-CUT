@@ -50,7 +50,7 @@ def gemini_ocr(page, api_key: str) -> dict:
         return out
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash")
     img = _page_to_img(page, scale=2)
     b64 = _img_to_base64(img)
     prompt = """請辨識這份台灣商品驗證登錄文件，提取以下資訊並以JSON格式回傳：
@@ -223,10 +223,9 @@ st.title("🗂️ PDF 歸檔工具")
 st.caption("上傳掃描合冊 PDF，自動切割並依證書編號/型號建立資料夾")
 st.markdown("---")
 
-api_key = st.text_input("請輸入 Gemini API Key", type="password",
-                         placeholder="AIza...")
+api_key = st.secrets.get("GEMINI_API_KEY", "")
 if not api_key:
-    st.warning("請先輸入 Gemini API Key 才能使用")
+    st.error("系統未設定 API Key，請聯絡管理員")
     st.stop()
 
 for k, v in [("zip_bytes",None),("zip_name",""),("segments",None),("last_file",None),("ready",False)]:
