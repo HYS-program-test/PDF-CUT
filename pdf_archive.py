@@ -2,21 +2,8 @@ import streamlit as st
 from pypdf import PdfReader, PdfWriter
 import fitz
 from PIL import Image
-import re, io, os, zipfile, tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# ── RapidOCR（懶載入，單例）─────────────────────────────
-_ocr_engine = None
-_ocr_lock = __import__('threading').Lock()
-
-def get_ocr():
-    global _ocr_engine
-    if _ocr_engine is None:
-        with _ocr_lock:
-            if _ocr_engine is None:
-                from rapidocr_onnxruntime import RapidOCR
-                _ocr_engine = RapidOCR()
-    return _ocr_engine
+import re, io, os, zipfile, base64
+import google.generativeai as genai
 
 # ── 常數 ─────────────────────────────────────────────────
 DOC_PRIORITY = ["RoHS", "聲明書", "申請書"]
@@ -33,43 +20,76 @@ DOC_FILENAMES = {
 }
 
 _cache: dict = {}
-_cache_lock = __import__('threading').Lock()
 
-# ── OCR 核心 ─────────────────────────────────────────────
-def _page_to_img(page, scale: int) -> Image.Image:
+# ── Gemini 辨識 ───────────────────────────────────────────
+def _page_to_img(page, scale: int = 2) -> Image.Image:
     mat = fitz.Matrix(scale, scale)
     pix = page.get_pixmap(matrix=mat)
     return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-def _ocr_image(img: Image.Image) -> str:
-    import numpy as np
-    img_array = np.array(img)
-    result, _ = get_ocr()(img_array)
-    if not result:
-        return ""
-    lines = [line[1] for line in result if line[2] > 0.4]
-    return "\n".join(lines)
+def _img_to_base64(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
 
-def ocr_region(page, top_pct: float, bot_pct: float, scale: int = 2) -> str:
-    key = f"{id(page)}_{top_pct}_{bot_pct}_{scale}"
-    with _cache_lock:
-        if key in _cache:
-            return _cache[key]
+def gemini_ocr(page, api_key: str) -> dict:
+    key = id(page)
+    if key in _cache:
+        return _cache[key]
 
     full_text = page.get_text().strip()
+
     if len(full_text) > 80:
-        with _cache_lock: _cache[key] = full_text
-        return full_text
+        out = {
+            "dtype": detect_type_from_text(full_text),
+            "ci":    extract_ci(full_text),
+            "model": extract_model(full_text),
+            "raw":   full_text,
+        }
+        _cache[key] = out
+        return out
 
-    img = _page_to_img(page, scale)
-    h = img.height
-    strip = img.crop((0, int(h * top_pct), img.width, int(h * bot_pct)))
-    text = _ocr_image(strip)
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    img = _page_to_img(page, scale=2)
+    b64 = _img_to_base64(img)
+    prompt = """請辨識這份台灣商品驗證登錄文件，提取以下資訊並以JSON格式回傳：
+{
+  "doc_type": "申請書 或 聲明書 或 RoHS 或 其他",
+  "cert_no": "CI開頭的受理編號或證書號碼，例如 CI3A2261861837",
+  "model": "室外機型號，例如 3MXM90PVLT"
+}
+如果找不到某個欄位，填 null。只回傳JSON，不要其他文字。"""
+    response = model.generate_content([
+        {"mime_type": "image/png", "data": b64},
+        prompt
+    ])
+    text = response.text.strip()
 
-    with _cache_lock: _cache[key] = text
-    return text
+    try:
+        import json
+        clean = re.sub(r'```json|```', '', text).strip()
+        result = json.loads(clean)
+        out = {
+            "dtype": _map_dtype(result.get("doc_type", "")),
+            "ci":    result.get("cert_no"),
+            "model": result.get("model"),
+            "raw":   text,
+        }
+        _cache[key] = out
+        return out
+    except Exception:
+        out = {"dtype": None, "ci": None, "model": None, "raw": text}
+        _cache[key] = out
+        return out
 
-# ── 修正 / 辨識 ───────────────────────────────────────────
+def _map_dtype(s: str):
+    if "申請" in s: return "申請書"
+    if "聲明" in s: return "聲明書"
+    if "RoHS" in s or "rohs" in s.lower(): return "RoHS"
+    return None
+
+# ── 文字版辨識（備用）────────────────────────────────────
 def fix_ocr(text: str) -> str:
     def _f(m):
         s = m.group(0)
@@ -77,19 +97,16 @@ def fix_ocr(text: str) -> str:
             ('IG','16'),('I6','16'),('IO','10'),('I0','10'),
             ('IB','18'),('I8','18'),('IS','15'),('I5','15'),
             ('I2','12'),('I4','14'),('I3','13'),('I9','19'),
-            ('2O','20'),('4O','40'),('6O','60'),('8O','80'),
-            ('U2','12'),('U6','16'),('U8','18'),('U0','10'),
         ]:
             s = s.replace(old, new)
         return s
     return re.sub(r'[A-Z]{2,}[A-Z0-9]+(?:LT|ET|VT)', _f, text)
 
-def detect_type(title: str, extra: str = ""):
-    combined = title + "\n" + extra
-    if any(kw in combined for kw in NOT_NEW_DOC_KW):
+def detect_type_from_text(text: str):
+    if any(kw in text for kw in NOT_NEW_DOC_KW):
         return None
     for dt in DOC_PRIORITY:
-        if any(kw in combined for kw in DOC_TITLE_KW[dt]):
+        if any(kw in text for kw in DOC_TITLE_KW[dt]):
             return dt
     return None
 
@@ -114,73 +131,31 @@ def extract_model(text: str):
         if m: return m.group(1)
     return None
 
-# ── 單頁處理 ────────────────────────────────────────────
-def process_page(args):
-    page, i = args
-
-    title_text = ocr_region(page, 0.0, 0.15, scale=2)
-    extra_text = ""
-    if not detect_type(title_text):
-        extra_text = ocr_region(page, 0.12, 0.22, scale=2)
-    dtype = detect_type(title_text, extra_text)
-
-    if not dtype:
-        return {"idx": i, "dtype": None}
-
-    ci_text = ocr_region(page, 0.12, 0.35, scale=2)
-
-    if dtype == "申請書":
-        model_text = ocr_region(page, 0.43, 0.58, scale=2)
-    elif dtype == "聲明書":
-        model_text = ocr_region(page, 0.25, 0.42, scale=3)
-    else:
-        model_text = ocr_region(page, 0.12, 0.30, scale=2)
-
-    combined = fix_ocr(title_text + "\n" + extra_text + "\n" + ci_text + "\n" + model_text)
-    return {
-        "idx":   i,
-        "dtype": dtype,
-        "ci":    extract_ci(combined),
-        "model": extract_model(combined),
-        "debug": {
-            "標題區": title_text.strip()[:200],
-            "CI區":   ci_text.strip()[:200],
-            "型號區": model_text.strip()[:400],
-        }
-    }
-
 # ── 主解析流程 ────────────────────────────────────────────
-def parse_pdf(uploaded_bytes: bytes, progress_cb=None) -> list[dict]:
+def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list[dict]:
     doc   = fitz.open(stream=uploaded_bytes, filetype="pdf")
     total = len(doc)
-    pages = [(doc[i], i) for i in range(total)]
-
-    results = [None] * total
-    done = 0
-
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        fut_map = {ex.submit(process_page, p): p[1] for p in pages}
-        for fut in as_completed(fut_map):
-            r = fut.result()
-            results[r["idx"]] = r
-            done += 1
-            if progress_cb:
-                progress_cb(done / total, f"已完成 {done}/{total} 頁…")
 
     segments = []
-    for r in results:
+    for i in range(total):
+        page = doc[i]
+        r = gemini_ocr(page, api_key)
+
+        if progress_cb:
+            progress_cb((i + 1) / total, f"已完成 {i+1}/{total} 頁…")
+
         if r["dtype"]:
             segments.append({
                 "type":      r["dtype"],
                 "ci":        r["ci"],
                 "model":     r["model"],
-                "page_idxs": [r["idx"]],
-                "debug":     r.get("debug", {}),
+                "page_idxs": [i],
+                "raw":       r.get("raw", ""),
             })
         else:
             target = next((s for s in reversed(segments) if s["type"] == "申請書"), None)
             if target is None and segments: target = segments[-1]
-            if target: target["page_idxs"].append(r["idx"])
+            if target: target["page_idxs"].append(i)
 
     ci_model = {s["ci"]: s["model"] for s in segments
                 if s["type"] == "申請書" and s["ci"] and s["model"]}
@@ -209,7 +184,7 @@ def build_zip(uploaded_bytes: bytes, segments: list[dict]) -> bytes:
 
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i, seg in enumerate(segments):
+        for seg in segments:
             ci    = seg["ci"]    or model_ci.get(seg["model"])
             model = seg["model"] or ci_model.get(seg["ci"])
             fname = DOC_FILENAMES.get(seg["type"], f"{seg['type']}.pdf")
@@ -248,6 +223,12 @@ st.title("🗂️ PDF 歸檔工具")
 st.caption("上傳掃描合冊 PDF，自動切割並依證書編號/型號建立資料夾")
 st.markdown("---")
 
+api_key = st.text_input("請輸入 Gemini API Key", type="password",
+                         placeholder="AIza...")
+if not api_key:
+    st.warning("請先輸入 Gemini API Key 才能使用")
+    st.stop()
+
 for k, v in [("zip_bytes",None),("zip_name",""),("segments",None),("last_file",None),("ready",False)]:
     if k not in st.session_state: st.session_state[k] = v
 
@@ -263,15 +244,19 @@ if uploaded:
     total_pages = len(PdfReader(io.BytesIO(uploaded_bytes)).pages)
 
     if st.session_state["segments"] is None:
-        st.info(f"共 {total_pages} 頁，分析中…")
+        st.info(f"共 {total_pages} 頁，AI 辨識中…")
         prog = st.progress(0)
         stat = st.empty()
         def _upd(pct, msg): prog.progress(pct); stat.caption(msg)
 
-        with st.spinner("分析中…"):
-            segs = parse_pdf(uploaded_bytes, progress_cb=_upd)
+        with st.spinner("AI 辨識中…"):
+            try:
+                segs = parse_pdf(uploaded_bytes, api_key, progress_cb=_upd)
+            except Exception as e:
+                st.error(f"辨識失敗：{e}")
+                st.stop()
 
-        prog.progress(1.0); stat.caption("✅ 分析完成")
+        prog.progress(1.0); stat.caption("✅ 辨識完成")
         st.session_state["segments"] = segs
         st.session_state["zip_bytes"] = build_zip(uploaded_bytes, segs)
         st.session_state["zip_name"]  = os.path.splitext(uploaded.name)[0] + "_歸檔.zip"
@@ -286,7 +271,7 @@ if uploaded:
     st.subheader("識別結果")
     ci_model = {s["ci"]:s["model"] for s in segs if s["type"]=="申請書" and s["ci"] and s["model"]}
     model_ci = {v:k for k,v in ci_model.items()}
-    show_debug = st.checkbox("顯示 OCR 除錯資訊", value=False)
+    show_debug = st.checkbox("顯示 AI 辨識原始輸出", value=False)
 
     for seg in segs:
         ci    = seg["ci"]    or model_ci.get(seg["model"]) or "⚠ 未識別"
@@ -298,11 +283,9 @@ if uploaded:
             st.warning(f"`{ci}-{model}` / **{fname}** ({page_str}, {len(pages)}頁) → 放於 ZIP 根目錄")
         else:
             st.write(f"✅ `{ci}-{model}` / **{fname}** ({page_str}, {len(pages)}頁)")
-        if show_debug and "debug" in seg:
-            with st.expander(f"OCR 原始輸出 — 頁{min(pages)+1} [{seg['type']}]", expanded=False):
-                for zone, txt in seg["debug"].items():
-                    st.markdown(f"**{zone}**")
-                    st.code(txt, language=None)
+        if show_debug and "raw" in seg:
+            with st.expander(f"AI 原始輸出 — 頁{min(pages)+1} [{seg['type']}]", expanded=False):
+                st.code(seg["raw"], language=None)
 
     st.markdown("---")
     st.subheader("下載")
@@ -315,4 +298,4 @@ if uploaded:
         )
         st.caption("識別成功的檔案在各資料夾中；未識別的在 ZIP 根目錄，請手動處理")
     else:
-        st.button("📥 下載 ZIP（分析完成後可用）", disabled=True, use_container_width=True)
+        st.button("📥 下載 ZIP（辨識完成後可用）", disabled=True, use_container_width=True)
