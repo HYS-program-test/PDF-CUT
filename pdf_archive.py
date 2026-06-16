@@ -5,7 +5,7 @@ from PIL import Image
 import re, io, os, zipfile, tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ── PaddleOCR（懶載入，單例）─────────────────────────────
+# ── RapidOCR（懶載入，單例）─────────────────────────────
 _ocr_engine = None
 _ocr_lock = __import__('threading').Lock()
 
@@ -14,8 +14,8 @@ def get_ocr():
     if _ocr_engine is None:
         with _ocr_lock:
             if _ocr_engine is None:
-                from paddleocr import PaddleOCR
-                _ocr_engine = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
+                from rapidocr_onnxruntime import RapidOCR
+                _ocr_engine = RapidOCR()
     return _ocr_engine
 
 # ── 常數 ─────────────────────────────────────────────────
@@ -42,15 +42,13 @@ def _page_to_img(page, scale: int) -> Image.Image:
     return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
 def _ocr_image(img: Image.Image) -> str:
-    """對 PIL Image 做 PaddleOCR，回傳文字。"""
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        img.save(tmp.name); path = tmp.name
-    try:
-        result = get_ocr().ocr(path, cls=True)
-        lines = [l[1][0] for l in (result[0] or []) if l[1][1] > 0.4]
-        return "\n".join(lines)
-    finally:
-        os.unlink(path)
+    import numpy as np
+    img_array = np.array(img)
+    result, _ = get_ocr()(img_array)
+    if not result:
+        return ""
+    lines = [line[1] for line in result if line[2] > 0.4]
+    return "\n".join(lines)
 
 def ocr_region(page, top_pct: float, bot_pct: float, scale: int = 2) -> str:
     key = f"{id(page)}_{top_pct}_{bot_pct}_{scale}"
@@ -116,12 +114,8 @@ def extract_model(text: str):
         if m: return m.group(1)
     return None
 
-# ── 單頁處理（可平行執行）────────────────────────────────
+# ── 單頁處理 ────────────────────────────────────────────
 def process_page(args):
-    """
-    對單一頁面做 OCR 並回傳結果。
-    回傳 dict：{"idx": i, "dtype": ..., "ci": ..., "model": ..., "debug": ...}
-    """
     page, i = args
 
     title_text = ocr_region(page, 0.0, 0.15, scale=2)
@@ -155,17 +149,16 @@ def process_page(args):
         }
     }
 
-# ── 主解析流程（平行 OCR）────────────────────────────────
+# ── 主解析流程 ────────────────────────────────────────────
 def parse_pdf(uploaded_bytes: bytes, progress_cb=None) -> list[dict]:
     doc   = fitz.open(stream=uploaded_bytes, filetype="pdf")
     total = len(doc)
     pages = [(doc[i], i) for i in range(total)]
 
-    # 平行 OCR（4 執行緒；PaddleOCR 本身是 CPU bound，超過 4 效益遞減）
     results = [None] * total
     done = 0
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=2) as ex:
         fut_map = {ex.submit(process_page, p): p[1] for p in pages}
         for fut in as_completed(fut_map):
             r = fut.result()
@@ -174,7 +167,6 @@ def parse_pdf(uploaded_bytes: bytes, progress_cb=None) -> list[dict]:
             if progress_cb:
                 progress_cb(done / total, f"已完成 {done}/{total} 頁…")
 
-    # 依頁序重建 segments（平行結果需排序）
     segments = []
     for r in results:
         if r["dtype"]:
@@ -186,12 +178,10 @@ def parse_pdf(uploaded_bytes: bytes, progress_cb=None) -> list[dict]:
                 "debug":     r.get("debug", {}),
             })
         else:
-            # 附表：歸入最近的申請書
             target = next((s for s in reversed(segments) if s["type"] == "申請書"), None)
             if target is None and segments: target = segments[-1]
             if target: target["page_idxs"].append(r["idx"])
 
-    # 補齊聲明書 / RoHS 缺少的 CI 或型號
     ci_model = {s["ci"]: s["model"] for s in segments
                 if s["type"] == "申請書" and s["ci"] and s["model"]}
     model_ci = {v: k for k, v in ci_model.items()}
@@ -199,13 +189,11 @@ def parse_pdf(uploaded_bytes: bytes, progress_cb=None) -> list[dict]:
         if not s["ci"]    and s["model"] and s["model"] in model_ci: s["ci"]    = model_ci[s["model"]]
         if not s["model"] and s["ci"]    and s["ci"] in ci_model:    s["model"] = ci_model[s["ci"]]
 
-    # 合併同 CI 的重複申請書（避免同一份被切成兩份）
     merged = []
     for s in segments:
         if (s["type"] == "申請書" and s["ci"] and merged
                 and merged[-1]["type"] == "申請書"
                 and merged[-1]["ci"] == s["ci"]):
-            # 同 CI → 合併頁碼
             merged[-1]["page_idxs"].extend(s["page_idxs"])
         else:
             merged.append(s)
@@ -275,7 +263,7 @@ if uploaded:
     total_pages = len(PdfReader(io.BytesIO(uploaded_bytes)).pages)
 
     if st.session_state["segments"] is None:
-        st.info(f"共 {total_pages} 頁，平行分析中（4 執行緒）…")
+        st.info(f"共 {total_pages} 頁，分析中…")
         prog = st.progress(0)
         stat = st.empty()
         def _upd(pct, msg): prog.progress(pct); stat.caption(msg)
