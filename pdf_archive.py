@@ -60,10 +60,12 @@ def gemini_ocr(page, api_key: str) -> dict:
   "model": "室外機型號，例如 3MXM90PVLT"
 }
 如果找不到某個欄位，填 null。只回傳JSON，不要其他文字。"""
-    response = model.generate_content([
-        {"mime_type": "image/png", "data": b64},
-        prompt
-    ])
+    import time
+time.sleep(13)  # 每分鐘5次，間隔13秒確保不超限
+response = model.generate_content([
+    {"mime_type": "image/png", "data": b64},
+    prompt
+])
     text = response.text.strip()
 
     try:
