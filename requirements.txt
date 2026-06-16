@@ -2,5 +2,6 @@ streamlit
 pypdf
 pymupdf
 pillow
-paddleocr
-paddlepaddle
+rapidocr-onnxruntime
+numpy
+onnxruntime
