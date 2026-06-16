@@ -61,11 +61,12 @@ def gemini_ocr(page, api_key: str) -> dict:
 }
 如果找不到某個欄位，填 null。只回傳JSON，不要其他文字。"""
     import time
-time.sleep(13)  # 每分鐘5次，間隔13秒確保不超限
-response = model.generate_content([
-    {"mime_type": "image/png", "data": b64},
-    prompt
-])
+    time.sleep(13)
+    response = model.generate_content([
+        {"mime_type": "image/png", "data": b64},
+        prompt
+    ])
+    text = response.text.strip()
     text = response.text.strip()
 
     try:
