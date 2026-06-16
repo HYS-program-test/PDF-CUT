@@ -50,7 +50,7 @@ def gemini_ocr(page, api_key: str) -> dict:
         return out
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash-latest")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     img = _page_to_img(page, scale=2)
     b64 = _img_to_base64(img)
     prompt = """請辨識這份台灣商品驗證登錄文件，提取以下資訊並以JSON格式回傳：
