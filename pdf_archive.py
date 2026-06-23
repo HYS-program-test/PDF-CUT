@@ -3,8 +3,7 @@ from pypdf import PdfReader, PdfWriter
 import fitz
 from PIL import Image
 import re, io, os, zipfile, base64
-import google.generativeai as genai
-import time
+import anthropic
 
 # ── 常數 ─────────────────────────────────────────────────
 DOC_PRIORITY = ["RoHS", "聲明書", "申請書"]
@@ -38,7 +37,7 @@ def clean_title_text(text: str) -> str:
     text = text.strip("_-—－：:，,。.")
     return text[:40]
 
-# ── Gemini OCR ────────────────────────────────────────────
+# ── 圖片轉換 ─────────────────────────────────────────────
 def _page_to_img(page, scale: int = 2) -> Image.Image:
     mat = fitz.Matrix(scale, scale)
     pix = page.get_pixmap(matrix=mat)
@@ -49,12 +48,13 @@ def _img_to_base64(img: Image.Image) -> str:
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
-def gemini_ocr(page, api_key: str) -> dict:
+# ── Claude OCR ────────────────────────────────────────────
+def claude_ocr(page, api_key: str) -> dict:
     key = id(page)
     if key in _cache:
         return _cache[key]
 
-    # 若 PDF 有文字層直接用
+    # 若 PDF 有文字層直接用，不呼叫 API
     full_text = page.get_text().strip()
     if len(full_text) > 80:
         dtype = detect_type_from_text(full_text)
@@ -66,14 +66,13 @@ def gemini_ocr(page, api_key: str) -> dict:
             "ci":           extract_ci(full_text),
             "model":        extract_model(full_text),
             "custom_title": custom_title,
-            "raw":          full_text,
+            "raw":          full_text[:500],
         }
         _cache[key] = out
         return out
 
-    # 純掃描 → 用 Gemini
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    # 純掃描 → 用 Claude API 辨識
+    client = anthropic.Anthropic(api_key=api_key)
     img = _page_to_img(page, scale=2)
     b64 = _img_to_base64(img)
 
@@ -81,17 +80,31 @@ def gemini_ocr(page, api_key: str) -> dict:
 {
   "doc_type": "申請書 或 聲明書 或 RoHS 或 其他",
   "cert_no": "CI開頭的受理編號或證書號碼，例如 CI3A2261861837",
-  "model": "室外機型號，例如 3MXM90PVLT",
-  "title": "若doc_type為其他，請填寫文件標題（例如：能源效率分級標示證書），否則填null"
+  "model": "室外機型號，例如 RXQ8AYLT 或 RXYQ8AYLT",
+  "title": "若doc_type為其他，請填寫文件標題，否則填null"
 }
 如果找不到某個欄位，填 null。只回傳JSON，不要其他文字。"""
 
-    time.sleep(13)
-    response = model.generate_content([
-        {"mime_type": "image/png", "data": b64},
-        prompt
-    ])
-    text = response.text.strip()
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=256,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": b64,
+                    }
+                },
+                {"type": "text", "text": prompt}
+            ]
+        }]
+    )
+
+    text = response.content[0].text.strip()
 
     try:
         import json
@@ -144,31 +157,31 @@ def detect_type_from_text(text: str):
     return None
 
 def extract_ci(text: str):
+    compact = re.sub(r"\s+", "", text)
     for pat in [
-        re.compile(r'受理編號\s*[：:﹕]\s*(CI\w+)'),
-        re.compile(r'證書號碼[：:﹕\s]*(CI\w+)'),
-        re.compile(r'\b(CI[3-9A-Z]\w{9,})\b'),
+        re.compile(r'受理編號[：:﹕]?(CI\w+)'),
+        re.compile(r'證書號碼[：:﹕]?(CI\w+)'),
+        re.compile(r'(CI[3-9A-Z]\w{9,})'),
     ]:
-        m = pat.search(text)
+        m = pat.search(compact)
         if m: return m.group(1)
     return None
 
 def extract_model(text: str):
     fixed = fix_ocr(text)
-    # 移除括號內容避免干擾
     fixed = re.sub(r"[（(][^）)]{0,20}[）)]", "", fixed)
+    compact = re.sub(r"\s+", "", fixed)
     for pat in [
-        re.compile(r'([A-Z]{2,}[A-Z0-9]+(?:AYLT|AVET|BYLT|BYMT|AVLT|AYMT|[A-Z]YLT))\s*[（(]?\s*室外', re.I),
-        re.compile(r'申請主型式\s*([A-Z][A-Z0-9]+(?:LT|ET|VT))', re.I),
-        re.compile(r'型式\s*[：:﹕]?\s*([A-Z]{2,}[A-Z0-9]{3,}(?:LT|ET|VT))', re.I),
-        re.compile(r'\b([A-Z]{2,}[A-Z0-9]{3,}(?:AYLT|BYLT|AVET|AVLT|ZVLT))\b'),
+        re.compile(r'申請主型式[：:﹕]?([A-Z][A-Z0-9]+(?:LT|ET|VT))', re.I),
+        re.compile(r'型式[：:﹕]?([A-Z]{2,}[A-Z0-9]{3,}(?:LT|ET|VT))', re.I),
+        re.compile(r'([A-Z]{2,}[A-Z0-9]{3,}(?:AYLT|BYLT|AVET|AVLT|ZVLT))'),
+        re.compile(r'([A-Z]{2,}[A-Z0-9]{5,}(?:LT|ET|VT))'),
     ]:
-        m = pat.search(fixed)
+        m = pat.search(compact)
         if m: return m.group(1).upper()
     return None
 
 def extract_custom_title_from_page(page, fallback_text: str = "") -> str:
-    """從 PDF 文字層抓最大字級文字當標題，失敗則從 OCR 文字推測。"""
     try:
         d = page.get_text("dict")
         page_h = float(page.rect.height)
@@ -189,7 +202,6 @@ def extract_custom_title_from_page(page, fallback_text: str = "") -> str:
     except Exception:
         pass
 
-    # fallback：從文字中猜標題
     ignore_words = ["頁", "第", "日期", "編號", "電話", "傳真", "地址", "申請人", "負責人"]
     for line in fallback_text.splitlines()[:8]:
         line_clean = clean_title_text(line.strip())
@@ -204,11 +216,11 @@ def extract_custom_title_from_page(page, fallback_text: str = "") -> str:
 def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list:
     doc   = fitz.open(stream=uploaded_bytes, filetype="pdf")
     total = len(doc)
-
     segments = []
+
     for i in range(total):
         page = doc[i]
-        r = gemini_ocr(page, api_key)
+        r = claude_ocr(page, api_key)
 
         if progress_cb:
             progress_cb((i + 1) / total, f"已完成 {i+1}/{total} 頁…")
@@ -216,7 +228,6 @@ def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list:
         dtype = r["dtype"]
 
         if dtype in ("申請書", "聲明書", "RoHS"):
-            # 標準三種文件 → 獨立一份
             segments.append({
                 "type":         dtype,
                 "ci":           r["ci"],
@@ -227,8 +238,6 @@ def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list:
             })
 
         elif r.get("custom_title"):
-            # 非三種、有標題 → 自訂文件
-            # 同標題續頁合併，不同標題開新份
             if (segments and segments[-1]["type"] == "自訂"
                     and segments[-1]["custom_title"] == r["custom_title"]):
                 segments[-1]["page_idxs"].append(i)
@@ -243,14 +252,13 @@ def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list:
                 })
 
         else:
-            # 附件或無法識別 → 附到最近的申請書，或最後一份
             target = next((s for s in reversed(segments) if s["type"] == "申請書"), None)
             if target is None and segments:
                 target = segments[-1]
             if target:
                 target["page_idxs"].append(i)
 
-    # 建立 CI ↔ model 對照表，互補缺漏
+    # CI ↔ model 互補
     ci_model = {s["ci"]: s["model"] for s in segments if s.get("ci") and s.get("model")}
     model_ci = {v: k for k, v in ci_model.items()}
     for s in segments:
@@ -276,7 +284,6 @@ def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list:
 def build_zip(uploaded_bytes: bytes, segments: list) -> bytes:
     pdf_reader = PdfReader(io.BytesIO(uploaded_bytes))
 
-    # model → 資料夾名稱
     model_folder = {}
     for s in segments:
         if s.get("ci") and s.get("model"):
@@ -357,9 +364,9 @@ st.title("🗂️ PDF 歸檔工具")
 st.caption("上傳掃描合冊 PDF，自動切割並依證書編號/型號建立資料夾")
 st.markdown("---")
 
-api_key = st.secrets.get("GEMINI_API_KEY", "")
+api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
 if not api_key:
-    st.error("系統未設定 GEMINI_API_KEY，請聯絡管理員")
+    st.error("系統未設定 ANTHROPIC_API_KEY，請聯絡管理員")
     st.stop()
 
 for k, v in [("zip_bytes",None),("zip_name",""),("segments",None),("last_file",None),("ready",False)]:
