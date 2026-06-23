@@ -4,6 +4,7 @@ import fitz
 from PIL import Image
 import re, io, os, zipfile, base64
 import google.generativeai as genai
+import time
 
 # ── 常數 ─────────────────────────────────────────────────
 DOC_PRIORITY = ["RoHS", "聲明書", "申請書"]
@@ -12,7 +13,11 @@ DOC_TITLE_KW = {
     "聲明書": ["符合型式聲明書", "Declaration of Conformity to Type"],
     "RoHS":   ["RoHS"],
 }
-NOT_NEW_DOC_KW = ["核備申請資料", "系列型號清單", "試驗報告清單", "附表"]
+NOT_NEW_DOC_KW = [
+    "核備申請資料", "系列型號清單", "試驗報告清單", "附表",
+    "系列型號單", "試驗報告單", "系列型式", "型號清單",
+    "報告清單", "附件", "續頁",
+]
 DOC_FILENAMES = {
     "申請書": "00_01 商品驗證登錄申請書.pdf",
     "聲明書": "00_07 符合型式聲明書.pdf",
@@ -21,7 +26,19 @@ DOC_FILENAMES = {
 
 _cache: dict = {}
 
-# ── Gemini 辨識 ───────────────────────────────────────────
+# ── 工具函式 ──────────────────────────────────────────────
+def safe_name(s: str) -> str:
+    return re.sub(r'[\\/:*?"<>|]', "_", s or "未識別")
+
+def clean_title_text(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "", text)
+    text = safe_name(text)
+    text = text.strip("_-—－：:，,。.")
+    return text[:40]
+
+# ── Gemini OCR ────────────────────────────────────────────
 def _page_to_img(page, scale: int = 2) -> Image.Image:
     mat = fitz.Matrix(scale, scale)
     pix = page.get_pixmap(matrix=mat)
@@ -37,52 +54,65 @@ def gemini_ocr(page, api_key: str) -> dict:
     if key in _cache:
         return _cache[key]
 
+    # 若 PDF 有文字層直接用
     full_text = page.get_text().strip()
-
     if len(full_text) > 80:
+        dtype = detect_type_from_text(full_text)
+        custom_title = None
+        if dtype is None:
+            custom_title = extract_custom_title_from_page(page, full_text)
         out = {
-            "dtype": detect_type_from_text(full_text),
-            "ci":    extract_ci(full_text),
-            "model": extract_model(full_text),
-            "raw":   full_text,
+            "dtype":        dtype,
+            "ci":           extract_ci(full_text),
+            "model":        extract_model(full_text),
+            "custom_title": custom_title,
+            "raw":          full_text,
         }
         _cache[key] = out
         return out
 
+    # 純掃描 → 用 Gemini
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-2.5-flash")
     img = _page_to_img(page, scale=2)
     b64 = _img_to_base64(img)
+
     prompt = """請辨識這份台灣商品驗證登錄文件，提取以下資訊並以JSON格式回傳：
 {
   "doc_type": "申請書 或 聲明書 或 RoHS 或 其他",
   "cert_no": "CI開頭的受理編號或證書號碼，例如 CI3A2261861837",
-  "model": "室外機型號，例如 3MXM90PVLT"
+  "model": "室外機型號，例如 3MXM90PVLT",
+  "title": "若doc_type為其他，請填寫文件標題（例如：能源效率分級標示證書），否則填null"
 }
 如果找不到某個欄位，填 null。只回傳JSON，不要其他文字。"""
-    import time
+
     time.sleep(13)
     response = model.generate_content([
         {"mime_type": "image/png", "data": b64},
         prompt
     ])
     text = response.text.strip()
-    text = response.text.strip()
 
     try:
         import json
         clean = re.sub(r'```json|```', '', text).strip()
         result = json.loads(clean)
+        dtype = _map_dtype(result.get("doc_type", ""))
+        custom_title = None
+        if dtype is None:
+            raw_title = result.get("title") or ""
+            custom_title = clean_title_text(raw_title) if raw_title else None
         out = {
-            "dtype": _map_dtype(result.get("doc_type", "")),
-            "ci":    result.get("cert_no"),
-            "model": result.get("model"),
-            "raw":   text,
+            "dtype":        dtype,
+            "ci":           result.get("cert_no"),
+            "model":        result.get("model"),
+            "custom_title": custom_title,
+            "raw":          text,
         }
         _cache[key] = out
         return out
     except Exception:
-        out = {"dtype": None, "ci": None, "model": None, "raw": text}
+        out = {"dtype": None, "ci": None, "model": None, "custom_title": None, "raw": text}
         _cache[key] = out
         return out
 
@@ -92,7 +122,7 @@ def _map_dtype(s: str):
     if "RoHS" in s or "rohs" in s.lower(): return "RoHS"
     return None
 
-# ── 文字版辨識（備用）────────────────────────────────────
+# ── 文字版辨識 ────────────────────────────────────────────
 def fix_ocr(text: str) -> str:
     def _f(m):
         s = m.group(0)
@@ -125,17 +155,53 @@ def extract_ci(text: str):
 
 def extract_model(text: str):
     fixed = fix_ocr(text)
+    # 移除括號內容避免干擾
+    fixed = re.sub(r"[（(][^）)]{0,20}[）)]", "", fixed)
     for pat in [
         re.compile(r'([A-Z]{2,}[A-Z0-9]+(?:AYLT|AVET|BYLT|BYMT|AVLT|AYMT|[A-Z]YLT))\s*[（(]?\s*室外', re.I),
         re.compile(r'申請主型式\s*([A-Z][A-Z0-9]+(?:LT|ET|VT))', re.I),
-        re.compile(r'\b([A-Z]{2,}[A-Z0-9]{3,}(?:AYLT|BYLT|AVET|AVLT))\b'),
+        re.compile(r'型式\s*[：:﹕]?\s*([A-Z]{2,}[A-Z0-9]{3,}(?:LT|ET|VT))', re.I),
+        re.compile(r'\b([A-Z]{2,}[A-Z0-9]{3,}(?:AYLT|BYLT|AVET|AVLT|ZVLT))\b'),
     ]:
         m = pat.search(fixed)
-        if m: return m.group(1)
+        if m: return m.group(1).upper()
     return None
 
+def extract_custom_title_from_page(page, fallback_text: str = "") -> str:
+    """從 PDF 文字層抓最大字級文字當標題，失敗則從 OCR 文字推測。"""
+    try:
+        d = page.get_text("dict")
+        page_h = float(page.rect.height)
+        spans = []
+        for block in d.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    txt = clean_title_text(span.get("text", ""))
+                    if not txt or len(txt) < 4:
+                        continue
+                    bbox = span.get("bbox", [0, 0, 0, 0])
+                    if bbox[1] > page_h * 0.45:
+                        continue
+                    spans.append((float(span.get("size", 0)), bbox[1], txt))
+        if spans:
+            spans.sort(key=lambda x: (-x[0], x[1]))
+            return spans[0][2]
+    except Exception:
+        pass
+
+    # fallback：從文字中猜標題
+    ignore_words = ["頁", "第", "日期", "編號", "電話", "傳真", "地址", "申請人", "負責人"]
+    for line in fallback_text.splitlines()[:8]:
+        line_clean = clean_title_text(line.strip())
+        if not line_clean or len(line_clean) < 4:
+            continue
+        if any(w in line_clean for w in ignore_words):
+            continue
+        return line_clean
+    return ""
+
 # ── 主解析流程 ────────────────────────────────────────────
-def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list[dict]:
+def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list:
     doc   = fitz.open(stream=uploaded_bytes, filetype="pdf")
     total = len(doc)
 
@@ -147,31 +213,58 @@ def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list[dic
         if progress_cb:
             progress_cb((i + 1) / total, f"已完成 {i+1}/{total} 頁…")
 
-        if r["dtype"]:
-            segments.append({
-                "type":      r["dtype"],
-                "ci":        r["ci"],
-                "model":     r["model"],
-                "page_idxs": [i],
-                "raw":       r.get("raw", ""),
-            })
-        else:
-            target = next((s for s in reversed(segments) if s["type"] == "申請書"), None)
-            if target is None and segments: target = segments[-1]
-            if target: target["page_idxs"].append(i)
+        dtype = r["dtype"]
 
-    ci_model = {s["ci"]: s["model"] for s in segments
-                if s["type"] == "申請書" and s["ci"] and s["model"]}
+        if dtype in ("申請書", "聲明書", "RoHS"):
+            # 標準三種文件 → 獨立一份
+            segments.append({
+                "type":         dtype,
+                "ci":           r["ci"],
+                "model":        r["model"],
+                "custom_title": None,
+                "page_idxs":    [i],
+                "raw":          r.get("raw", ""),
+            })
+
+        elif r.get("custom_title"):
+            # 非三種、有標題 → 自訂文件
+            # 同標題續頁合併，不同標題開新份
+            if (segments and segments[-1]["type"] == "自訂"
+                    and segments[-1]["custom_title"] == r["custom_title"]):
+                segments[-1]["page_idxs"].append(i)
+            else:
+                segments.append({
+                    "type":         "自訂",
+                    "ci":           None,
+                    "model":        None,
+                    "custom_title": r["custom_title"],
+                    "page_idxs":    [i],
+                    "raw":          r.get("raw", ""),
+                })
+
+        else:
+            # 附件或無法識別 → 附到最近的申請書，或最後一份
+            target = next((s for s in reversed(segments) if s["type"] == "申請書"), None)
+            if target is None and segments:
+                target = segments[-1]
+            if target:
+                target["page_idxs"].append(i)
+
+    # 建立 CI ↔ model 對照表，互補缺漏
+    ci_model = {s["ci"]: s["model"] for s in segments if s.get("ci") and s.get("model")}
     model_ci = {v: k for k, v in ci_model.items()}
     for s in segments:
-        if not s["ci"]    and s["model"] and s["model"] in model_ci: s["ci"]    = model_ci[s["model"]]
-        if not s["model"] and s["ci"]    and s["ci"] in ci_model:    s["model"] = ci_model[s["ci"]]
+        if not s.get("ci") and s.get("model") and s["model"] in model_ci:
+            s["ci"] = model_ci[s["model"]]
+        if not s.get("model") and s.get("ci") and s["ci"] in ci_model:
+            s["model"] = ci_model[s["ci"]]
 
+    # 合併同 CI 的重複申請書
     merged = []
     for s in segments:
-        if (s["type"] == "申請書" and s["ci"] and merged
+        if (s["type"] == "申請書" and s.get("ci") and merged
                 and merged[-1]["type"] == "申請書"
-                and merged[-1]["ci"] == s["ci"]):
+                and merged[-1].get("ci") == s.get("ci")):
             merged[-1]["page_idxs"].extend(s["page_idxs"])
         else:
             merged.append(s)
@@ -179,31 +272,69 @@ def parse_pdf(uploaded_bytes: bytes, api_key: str, progress_cb=None) -> list[dic
     doc.close()
     return merged
 
-def build_zip(uploaded_bytes: bytes, segments: list[dict]) -> bytes:
+# ── 建立 ZIP ──────────────────────────────────────────────
+def build_zip(uploaded_bytes: bytes, segments: list) -> bytes:
     pdf_reader = PdfReader(io.BytesIO(uploaded_bytes))
-    ci_model = {s["ci"]: s["model"] for s in segments
-                if s["type"] == "申請書" and s["ci"] and s["model"]}
-    model_ci = {v: k for k, v in ci_model.items()}
+
+    # model → 資料夾名稱
+    model_folder = {}
+    for s in segments:
+        if s.get("ci") and s.get("model"):
+            model_folder[s["model"]] = f"{safe_name(s['ci'])}-{safe_name(s['model'])}"
+
+    used_paths = set()
+
+    def unique_zip_path(path: str) -> str:
+        path = path.replace("\\", "/")
+        if path not in used_paths:
+            used_paths.add(path)
+            return path
+        folder, filename = os.path.split(path)
+        name, ext = os.path.splitext(filename)
+        n = 1
+        while True:
+            new_filename = f"{name}({n}){ext}"
+            new_path = f"{folder}/{new_filename}" if folder else new_filename
+            if new_path not in used_paths:
+                used_paths.add(new_path)
+                return new_path
+            n += 1
+
+    def get_filename(seg: dict) -> str:
+        dtype = seg.get("type")
+        if dtype in DOC_FILENAMES:
+            return DOC_FILENAMES[dtype]
+        if dtype == "自訂" and seg.get("custom_title"):
+            return f"{safe_name(seg['custom_title'])}.pdf"
+        pages = seg.get("page_idxs") or []
+        return f"未識別文件_p{pages[0]+1}.pdf" if pages else "未識別文件.pdf"
 
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for seg in segments:
-            ci    = seg["ci"]    or model_ci.get(seg["model"])
-            model = seg["model"] or ci_model.get(seg["ci"])
-            fname = DOC_FILENAMES.get(seg["type"], f"{seg['type']}.pdf")
+            model = seg.get("model")
+            dtype = seg.get("type")
+            fname = get_filename(seg)
+
             writer = PdfWriter()
             for pidx in sorted(seg["page_idxs"]):
                 writer.add_page(pdf_reader.pages[pidx])
             pdf_buf = io.BytesIO()
             writer.write(pdf_buf)
-            if ci and model:
-                zf.writestr(f"{ci}-{model}/{fname}", pdf_buf.getvalue())
+
+            folder = model_folder.get(model)
+            if dtype in DOC_FILENAMES and folder:
+                zip_path = f"{folder}/{fname}"
             else:
-                pages = seg["page_idxs"]
-                page_str = f"p{pages[0]+1}" if len(pages)==1 else f"p{min(pages)+1}-{max(pages)+1}"
-                zf.writestr(f"未識別_{seg['type']}_{page_str}.pdf", pdf_buf.getvalue())
+                zip_path = fname
+
+            zip_path = unique_zip_path(zip_path)
+            zf.writestr(zip_path, pdf_buf.getvalue())
+
     return zip_buf.getvalue()
 
+# ════════════════════════════════════════════════════════
+# Streamlit UI
 # ════════════════════════════════════════════════════════
 st.set_page_config(page_title="PDF 歸檔工具", page_icon="🗂️", layout="centered")
 st.markdown("""
@@ -228,11 +359,12 @@ st.markdown("---")
 
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 if not api_key:
-    st.error("系統未設定 API Key，請聯絡管理員")
+    st.error("系統未設定 GEMINI_API_KEY，請聯絡管理員")
     st.stop()
 
 for k, v in [("zip_bytes",None),("zip_name",""),("segments",None),("last_file",None),("ready",False)]:
-    if k not in st.session_state: st.session_state[k] = v
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 uploaded = st.file_uploader("請上傳掃描 PDF", type=["pdf"])
 
@@ -259,34 +391,46 @@ if uploaded:
                 st.stop()
 
         prog.progress(1.0); stat.caption("✅ 辨識完成")
-        st.session_state["segments"] = segs
+        st.session_state["segments"]  = segs
         st.session_state["zip_bytes"] = build_zip(uploaded_bytes, segs)
         st.session_state["zip_name"]  = os.path.splitext(uploaded.name)[0] + "_歸檔.zip"
         st.session_state["ready"]     = True
 
     segs = st.session_state["segments"]
-    ok   = sum(1 for s in segs if s["ci"] and s["model"])
-    bad  = len(segs) - ok
-    st.success(f"共 {total_pages} 頁，識別出 {len(segs)} 份文件（✅ {ok} 份可歸檔，⚠ {bad} 份未完整識別）")
-    st.markdown("---")
+    model_folder = {}
+    for s in segs:
+        if s.get("ci") and s.get("model"):
+            model_folder[s["model"]] = f"{s['ci']}-{s['model']}"
 
+    ok  = sum(1 for s in segs if s.get("model") and s.get("model") in model_folder)
+    bad = len(segs) - ok
+    st.success(f"共 {total_pages} 頁，識別出 {len(segs)} 份文件（✅ {ok} 份可歸檔，⚠ {bad} 份放根目錄）")
+    st.markdown("---")
     st.subheader("識別結果")
-    ci_model = {s["ci"]:s["model"] for s in segs if s["type"]=="申請書" and s["ci"] and s["model"]}
-    model_ci = {v:k for k,v in ci_model.items()}
+
     show_debug = st.checkbox("顯示 AI 辨識原始輸出", value=False)
 
     for seg in segs:
-        ci    = seg["ci"]    or model_ci.get(seg["model"]) or "⚠ 未識別"
-        model = seg["model"] or ci_model.get(seg["ci"])    or "⚠ 未識別"
-        fname = DOC_FILENAMES.get(seg["type"], seg["type"])
-        pages = seg["page_idxs"]
-        page_str = f"p{min(pages)+1}" if len(pages)==1 else f"p{min(pages)+1}–{max(pages)+1}"
-        if "⚠" in ci or "⚠" in model:
-            st.warning(f"`{ci}-{model}` / **{fname}** ({page_str}, {len(pages)}頁) → 放於 ZIP 根目錄")
+        ci    = seg.get("ci")    or "⚠ 未識別CI"
+        model = seg.get("model") or "⚠ 未識別型號"
+        dtype = seg.get("type")
+
+        if dtype == "自訂" and seg.get("custom_title"):
+            fname = f"{safe_name(seg['custom_title'])}.pdf"
         else:
-            st.write(f"✅ `{ci}-{model}` / **{fname}** ({page_str}, {len(pages)}頁)")
+            fname = DOC_FILENAMES.get(dtype, dtype or "未識別")
+
+        pages    = seg["page_idxs"]
+        page_str = f"p{min(pages)+1}" if len(pages)==1 else f"p{min(pages)+1}–{max(pages)+1}"
+        folder   = model_folder.get(seg.get("model"))
+
+        if folder:
+            st.write(f"✅ `{ci}-{model}` / **{fname}** ({page_str}, {len(pages)}頁) → `{folder}`")
+        else:
+            st.warning(f"`{ci}-{model}` / **{fname}** ({page_str}, {len(pages)}頁) → 放於 ZIP 根目錄")
+
         if show_debug and "raw" in seg:
-            with st.expander(f"AI 原始輸出 — 頁{min(pages)+1} [{seg['type']}]", expanded=False):
+            with st.expander(f"AI 原始輸出 — 頁{min(pages)+1} [{dtype}]", expanded=False):
                 st.code(seg["raw"], language=None)
 
     st.markdown("---")
@@ -296,8 +440,9 @@ if uploaded:
             label="📥 下載 ZIP",
             data=st.session_state["zip_bytes"],
             file_name=st.session_state["zip_name"],
-            mime="application/zip", use_container_width=True,
+            mime="application/zip",
+            use_container_width=True,
         )
-        st.caption("識別成功的檔案在各資料夾中；未識別的在 ZIP 根目錄，請手動處理")
+        st.caption("主要文件放入 CI-型號資料夾；其他文件放 ZIP 根目錄，同名自動加 (1)(2)。")
     else:
         st.button("📥 下載 ZIP（辨識完成後可用）", disabled=True, use_container_width=True)
