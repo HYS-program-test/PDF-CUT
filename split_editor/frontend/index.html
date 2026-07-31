@@ -28,32 +28,18 @@ html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;b
 }
 .thumb-wrap.group-start{ margin-left:14px; }
 
-.checkbox{
-  position:absolute; top:8px; left:8px; width:18px; height:18px;
-  border-radius:5px; border:2px solid #c7cbe0; background:#fff;
-  cursor:pointer; z-index:2;
-}
-.checkbox.checked{ background:var(--plus-blue); border-color:var(--plus-blue); }
-.checkbox.checked::after{
-  content:"✓"; color:#fff; font-size:12px; font-weight:700;
-  position:absolute; left:2px; top:-1px;
-}
-
 .thumb-card{
   background:var(--card); border:1px solid var(--border); border-radius:8px;
   box-shadow:0 3px 10px rgba(44,47,69,0.08); overflow:hidden; cursor:default;
+  transition: border-color .12s, box-shadow .12s;
 }
 .thumb-card img{ display:block; width:100%; height:auto; }
 
-.split-handle{
-  position:absolute; left:-15px; top:50%; transform:translateY(-50%);
-  width:26px; height:26px; border-radius:50%; background:#fff;
-  border:2px solid var(--plus-blue); color:var(--plus-blue);
-  display:none; align-items:center; justify-content:center;
-  font-size:16px; font-weight:700; cursor:pointer; z-index:3;
-  box-shadow:0 2px 6px rgba(0,0,0,0.12);
+.thumb-wrap:not(.group-start) .thumb-card{ cursor:pointer; }
+.thumb-wrap:not(.group-start) .thumb-card:hover{
+  border-color:var(--plus-blue);
+  box-shadow:0 0 0 2px rgba(111,140,240,0.35);
 }
-.thumb-wrap:not(.group-start):hover .split-handle{ display:flex; }
 
 .group-gap{
   width:44px; display:flex; align-items:center; justify-content:center;
@@ -84,7 +70,7 @@ html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;b
 </head>
 <body>
 
-<div class="hint">滑鼠移到某一頁左側會出現 ＋，點擊可在該處新增分割點；文件間的藍色 ＋ 可合併（取消分割）；標籤可直接點擊修改檔名。</div>
+<div class="hint">同一份文件的頁面會緊貼在一起；直接點擊縮圖可切換該頁是否為新文件起點；文件間的藍色 ＋ 可合併（取消分割）；標籤可直接點擊修改檔名。</div>
 <div id="stage">
   <div id="grid"></div>
 </div>
@@ -99,7 +85,7 @@ function componentReady() { postToStreamlit("streamlit:componentReady", { apiVer
 function setComponentValue(value) { postToStreamlit("streamlit:setComponentValue", { value }); }
 function setFrameHeight(height = 700) { postToStreamlit("streamlit:setFrameHeight", { height }); }
 
-let pages = [];        // [{index, thumb_data_url, isSplit, filename, checked}]
+let pages = [];        // [{index, thumb_data_url, isSplit, filename}]
 const grid = document.getElementById("grid");
 
 function send() {
@@ -170,33 +156,22 @@ function render() {
       wrap.className = "thumb-wrap" + (pIdxInGroup === 0 ? " group-start" : "");
       wrap.dataset.index = p.index;
 
-      const checkbox = document.createElement("div");
-      checkbox.className = "checkbox" + (p.checked ? " checked" : "");
-      checkbox.addEventListener("click", () => {
-        p.checked = !p.checked;
-        render();
-      });
-      wrap.appendChild(checkbox);
+      const card = document.createElement("div");
+      card.className = "thumb-card";
+      card.title = pIdxInGroup !== 0 ? "點擊：在此新增分割點" : "";
+      const img = document.createElement("img");
+      img.src = p.thumb_data_url;
+      card.appendChild(img);
 
       if (pIdxInGroup !== 0) {
-        const handle = document.createElement("div");
-        handle.className = "split-handle";
-        handle.textContent = "+";
-        handle.title = "在此新增分割點";
-        handle.addEventListener("click", () => {
+        card.addEventListener("click", () => {
           p.isSplit = true;
           p.filename = p.filename || `文件_${p.index + 1}`;
           render();
           send();
         });
-        wrap.appendChild(handle);
       }
 
-      const card = document.createElement("div");
-      card.className = "thumb-card";
-      const img = document.createElement("img");
-      img.src = p.thumb_data_url;
-      card.appendChild(img);
       wrap.appendChild(card);
 
       if (pIdxInGroup === 0) {
@@ -218,7 +193,6 @@ window.addEventListener("message", (event) => {
     thumb_data_url: p.thumb_data_url,
     isSplit: !!p.is_split,
     filename: p.filename || "",
-    checked: false,
   }));
 
   render();

@@ -37,10 +37,10 @@ TITLE_MAX_CHARS = 40
 
 CERT_KEYWORDS = [
     "登錄證書編號", "驗證登錄證書編號", "商品驗證登錄證書編號", "證書編號", "證書字號",
-    "登錄字號", "登錄編號", "認證編號", "認證字號", "許可字號", "核可字號", "字號", "編號",
+    "登錄字號", "登錄編號", "認證編號", "認證字號", "許可字號", "核可字號",
 ]
 MODEL_KEYWORDS = [
-    "室外機型號", "室外機機型", "室內機型號", "產品型號", "商品型號", "型式", "型號", "機型",
+    "室外機型號", "室外機機型", "室內機型號", "產品型號", "商品型號", "型號", "機型",
 ]
 
 # ----------------------------------------------------------------------------
@@ -166,10 +166,10 @@ def normalize_text(text: str) -> str:
 def extract_code(normalized_text, keywords):
     for kw in keywords:
         pattern = re.escape(kw) + r"[\s:：\-—－\.、]{0,6}([A-Za-z0-9][A-Za-z0-9\-\/\.]{3,24})"
-        m = re.search(pattern, normalized_text)
-        if m:
+        for m in re.finditer(pattern, normalized_text):
             candidate = m.group(1).strip(" -/.")
-            if len(candidate) >= 4:
+            # 真正的型號/證書編號一定含數字；純英文字（如標籤的英文對照 "Serial"）一律跳過
+            if len(candidate) >= 4 and any(ch.isdigit() for ch in candidate):
                 return candidate
     return None
 
@@ -187,8 +187,11 @@ def guess_filename(doc, page_start, page_end, title_text):
 
     code = extract_code(normalized, CERT_KEYWORDS) or extract_code(normalized, MODEL_KEYWORDS)
     if not code:
-        m = re.search(r"\b[A-Z0-9]{2,}(?:[-\/][A-Z0-9]+){1,4}\b", normalized)
-        code = m.group(0) if m else None
+        for m in re.finditer(r"\b[A-Z0-9]{2,}(?:[-\/][A-Z0-9]+){1,4}\b", normalized):
+            candidate = m.group(0)
+            if any(ch.isdigit() for ch in candidate):
+                code = candidate
+                break
 
     title_clean = sanitize_filename(title_text)
     if code:
