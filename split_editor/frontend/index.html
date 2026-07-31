@@ -5,75 +5,88 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
 :root {
-  --sb-green: #00704A;
-  --sb-green-dark: #063528;
-  --sb-cream: #F2EFE4;
-  --sb-gold: #C6A664;
-  --sb-white: #ffffff;
+  --bg: #eef1fb;
+  --card: #ffffff;
+  --border: #e3e7f5;
+  --plus-blue: #6f8cf0;
+  --text: #2c2f45;
+  --muted: #8b8fa3;
 }
-html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;background:var(--sb-cream);color:var(--sb-green-dark)}
-.hint{font-size:12px;color:#6b6b6b;padding:6px 4px 10px 4px}
-#stage{position:relative;overflow-y:auto;overflow-x:hidden;height:640px;border:1px solid rgba(0,112,74,.15);border-radius:12px;background:var(--sb-white);padding:10px 14px}
-#pageList{position:relative}
+html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;background:var(--bg);color:var(--text)}
+.hint{font-size:12px;color:var(--muted);padding:6px 4px 10px 4px}
 
-.split-marker{
-  position:relative;
-  border-top:3px dashed var(--sb-gold);
-  margin:16px 0 8px 0;
-  padding-top:8px;
-  display:flex;
-  align-items:center;
-  gap:8px;
+#stage{
+  overflow-y:auto; height:640px; border-radius:12px; padding:20px 16px;
 }
-.badge{
-  position:absolute; top:-13px; left:8px;
-  background:var(--sb-green); color:#fff; font-size:11px; font-weight:700;
-  padding:2px 10px; border-radius:999px;
-}
-.handle{
-  cursor:grab; user-select:none; font-size:14px; color:var(--sb-gold);
-  padding:3px 6px; border:1px solid var(--sb-gold); border-radius:6px; background:#fff;
-  flex:0 0 auto;
-}
-.handle:active{cursor:grabbing}
-.fname-input{
-  flex:1 1 auto; font-size:13px; padding:5px 8px; border:1px solid #d9d2bd;
-  border-radius:6px; color:var(--sb-green-dark);
-}
-.remove-btn{
-  flex:0 0 auto; font-size:12px; border:1px solid #e2b8b8; color:#a33; background:#fff;
-  border-radius:6px; padding:4px 8px; cursor:pointer;
-}
-.remove-btn:hover{background:#fdeeee}
 
-.add-zone{height:14px; position:relative; margin:2px 0;}
-.add-btn{
-  display:none; position:absolute; left:50%; top:-9px; transform:translateX(-50%);
-  font-size:11px; padding:2px 10px; border-radius:999px; border:1px dashed var(--sb-green);
-  background:#eefaf3; color:var(--sb-green); cursor:pointer; white-space:nowrap;
+#grid{
+  display:flex; flex-wrap:wrap; align-items:flex-start;
 }
-.add-zone:hover .add-btn{display:block}
-.add-zone:hover{background:rgba(0,112,74,0.05); border-radius:6px}
 
-.page-card{
-  border:1px solid rgba(0,112,74,.15); border-radius:10px; padding:8px; background:#fff;
-  box-shadow:0 2px 6px rgba(6,53,40,.06);
+.thumb-wrap{
+  position:relative; width:150px; margin:0 2px 26px 2px;
 }
-.page-card img{display:block; width:200px; max-width:100%; height:auto; margin:0 auto; border-radius:4px}
-.page-label{text-align:center; font-size:12px; font-weight:600; color:var(--sb-green-dark); margin-top:4px}
+.thumb-wrap.group-start{ margin-left:14px; }
 
-#dragline{
-  position:absolute; left:0; right:0; height:0; border-top:4px dashed var(--sb-green);
-  pointer-events:none; display:none; z-index:10;
+.checkbox{
+  position:absolute; top:8px; left:8px; width:18px; height:18px;
+  border-radius:5px; border:2px solid #c7cbe0; background:#fff;
+  cursor:pointer; z-index:2;
 }
+.checkbox.checked{ background:var(--plus-blue); border-color:var(--plus-blue); }
+.checkbox.checked::after{
+  content:"✓"; color:#fff; font-size:12px; font-weight:700;
+  position:absolute; left:2px; top:-1px;
+}
+
+.thumb-card{
+  background:var(--card); border:1px solid var(--border); border-radius:8px;
+  box-shadow:0 3px 10px rgba(44,47,69,0.08); overflow:hidden; cursor:default;
+}
+.thumb-card img{ display:block; width:100%; height:auto; }
+
+.split-handle{
+  position:absolute; left:-15px; top:50%; transform:translateY(-50%);
+  width:26px; height:26px; border-radius:50%; background:#fff;
+  border:2px solid var(--plus-blue); color:var(--plus-blue);
+  display:none; align-items:center; justify-content:center;
+  font-size:16px; font-weight:700; cursor:pointer; z-index:3;
+  box-shadow:0 2px 6px rgba(0,0,0,0.12);
+}
+.thumb-wrap:not(.group-start):hover .split-handle{ display:flex; }
+
+.group-gap{
+  width:44px; display:flex; align-items:center; justify-content:center;
+  align-self:center; margin-bottom:26px; flex:0 0 auto;
+}
+.merge-btn{
+  width:30px; height:30px; border-radius:50%; background:var(--plus-blue); color:#fff;
+  border:none; font-size:18px; font-weight:700; cursor:pointer; line-height:1;
+  box-shadow:0 2px 8px rgba(111,140,240,0.4);
+}
+.merge-btn:hover{ background:#5474e0; }
+
+.pill-block{ margin-top:8px; }
+.pill{
+  display:inline-block; max-width:150px; font-size:12px; font-weight:600;
+  padding:4px 10px; border-radius:999px; color:#3b3f57; border:none;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:130px;
+}
+.page-count{ font-size:11px; color:var(--muted); margin-top:3px; padding-left:2px; }
+
+.palette-0 .pill{ background:#fbdce6; }
+.palette-1 .pill{ background:#fdeecb; }
+.palette-2 .pill{ background:#cdeef0; }
+.palette-3 .pill{ background:#e5dcf7; }
+.palette-4 .pill{ background:#d8e6fb; }
+.palette-5 .pill{ background:#d9f3df; }
 </style>
 </head>
 <body>
 
-<div class="hint">拖曳灰金色把手 ⠿ 可移動分割線；把滑鼠移到頁面縫隙會出現「＋ 在此分割」；虛線上可直接改檔名。</div>
+<div class="hint">滑鼠移到某一頁左側會出現 ＋，點擊可在該處新增分割點；文件間的藍色 ＋ 可合併（取消分割）；標籤可直接點擊修改檔名。</div>
 <div id="stage">
-  <div id="pageList"></div>
-  <div id="dragline"></div>
+  <div id="grid"></div>
 </div>
 
 <script>
@@ -84,15 +97,10 @@ function postToStreamlit(type, payload = {}) {
 }
 function componentReady() { postToStreamlit("streamlit:componentReady", { apiVersion: 1 }); }
 function setComponentValue(value) { postToStreamlit("streamlit:setComponentValue", { value }); }
-function setFrameHeight(height = 720) { postToStreamlit("streamlit:setFrameHeight", { height }); }
+function setFrameHeight(height = 700) { postToStreamlit("streamlit:setFrameHeight", { height }); }
 
-let pages = [];       // [{index, thumb_data_url, isSplit, filename}]
-let dragging = null;  // {originIndex}
-let pendingSnapIndex = null;
-
-const stage = document.getElementById("stage");
-const pageList = document.getElementById("pageList");
-const dragline = document.getElementById("dragline");
+let pages = [];        // [{index, thumb_data_url, isSplit, filename, checked}]
+const grid = document.getElementById("grid");
 
 function send() {
   const splits = pages
@@ -102,143 +110,102 @@ function send() {
   setComponentValue({ splits });
 }
 
-function escapeAttr(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+function groupsFromPages() {
+  const groups = [];
+  pages.forEach((p, i) => {
+    if (p.isSplit || i === 0) {
+      groups.push({ startIndex: p.index, pages: [p] });
+    } else {
+      groups[groups.length - 1].pages.push(p);
+    }
+  });
+  return groups;
+}
+
+function makeEditableFilenameInput(group, paletteClass) {
+  const wrap = document.createElement("div");
+  wrap.className = `pill-block ${paletteClass}`;
+
+  const input = document.createElement("input");
+  input.className = "pill";
+  input.type = "text";
+  input.value = group.pages[0].filename || "";
+  input.title = input.value;
+  input.addEventListener("input", (e) => { group.pages[0].filename = e.target.value; });
+  input.addEventListener("change", () => send());
+  wrap.appendChild(input);
+
+  const count = document.createElement("div");
+  count.className = "page-count";
+  count.textContent = `${group.pages.length} 頁`;
+  wrap.appendChild(count);
+
+  return wrap;
 }
 
 function render() {
-  pageList.innerHTML = "";
+  grid.innerHTML = "";
+  const groups = groupsFromPages();
+  const palette = ["palette-0", "palette-1", "palette-2", "palette-3", "palette-4", "palette-5"];
 
-  pages.forEach((p, i) => {
-    if (p.isSplit) {
-      const marker = document.createElement("div");
-      marker.className = "split-marker";
-      marker.dataset.index = p.index;
-
-      const badge = document.createElement("div");
-      badge.className = "badge";
-      badge.textContent = p.index === 0 ? "第一份文件" : "新文件開始";
-      marker.appendChild(badge);
-
-      const handle = document.createElement("div");
-      handle.className = "handle";
-      handle.textContent = "⠿⠿⠿";
-      handle.dataset.index = p.index;
-      handle.addEventListener("mousedown", onHandleMouseDown);
-      marker.appendChild(handle);
-
-      const input = document.createElement("input");
-      input.className = "fname-input";
-      input.type = "text";
-      input.value = p.filename || "";
-      input.dataset.index = p.index;
-      input.addEventListener("input", (e) => { p.filename = e.target.value; });
-      input.addEventListener("change", () => send());
-      marker.appendChild(input);
-
-      if (p.index !== 0) {
-        const rm = document.createElement("button");
-        rm.className = "remove-btn";
-        rm.textContent = "✕ 取消分割";
-        rm.addEventListener("click", () => {
-          p.isSplit = false;
-          render();
-          send();
-        });
-        marker.appendChild(rm);
-      }
-
-      pageList.appendChild(marker);
-    } else if (i !== 0) {
-      const zone = document.createElement("div");
-      zone.className = "add-zone";
+  groups.forEach((group, gIdx) => {
+    if (gIdx !== 0) {
+      const gap = document.createElement("div");
+      gap.className = "group-gap";
       const btn = document.createElement("button");
-      btn.className = "add-btn";
-      btn.textContent = "＋ 在此分割";
+      btn.className = "merge-btn";
+      btn.textContent = "+";
+      btn.title = "點擊合併（取消此處分割）";
       btn.addEventListener("click", () => {
-        p.isSplit = true;
-        p.filename = p.filename || `文件_${p.index + 1}`;
+        group.pages[0].isSplit = false;
         render();
         send();
       });
-      zone.appendChild(btn);
-      pageList.appendChild(zone);
+      gap.appendChild(btn);
+      grid.appendChild(gap);
     }
 
-    const card = document.createElement("div");
-    card.className = "page-card";
-    card.dataset.index = p.index;
-    const img = document.createElement("img");
-    img.src = p.thumb_data_url;
-    card.appendChild(img);
-    const label = document.createElement("div");
-    label.className = "page-label";
-    label.textContent = `第 ${p.index + 1} 頁`;
-    card.appendChild(label);
-    pageList.appendChild(card);
-  });
-}
+    group.pages.forEach((p, pIdxInGroup) => {
+      const wrap = document.createElement("div");
+      wrap.className = "thumb-wrap" + (pIdxInGroup === 0 ? " group-start" : "");
+      wrap.dataset.index = p.index;
 
-function pageCardRects() {
-  return Array.from(pageList.querySelectorAll(".page-card")).map(el => ({
-    index: Number(el.dataset.index),
-    top: el.getBoundingClientRect().top,
-  }));
-}
-
-function onHandleMouseDown(e) {
-  const originIndex = Number(e.currentTarget.dataset.index);
-  dragging = { originIndex };
-  pendingSnapIndex = null;
-  dragline.style.display = "block";
-  document.addEventListener("mousemove", onDragMove);
-  document.addEventListener("mouseup", onDragEnd);
-  e.preventDefault();
-}
-
-function onDragMove(e) {
-  if (!dragging) return;
-  const rects = pageCardRects().filter(r => r.index !== 0); // 不可移到第0頁之前
-  if (!rects.length) return;
-
-  let nearest = rects[0];
-  let best = Infinity;
-  rects.forEach(r => {
-    const d = Math.abs(r.top - e.clientY);
-    if (d < best) { best = d; nearest = r; }
-  });
-
-  pendingSnapIndex = nearest.index;
-
-  const stageRect = stage.getBoundingClientRect();
-  const lineY = nearest.top - stageRect.top + stage.scrollTop - 2;
-  dragline.style.top = `${lineY}px`;
-}
-
-function onDragEnd() {
-  document.removeEventListener("mousemove", onDragMove);
-  document.removeEventListener("mouseup", onDragEnd);
-  dragline.style.display = "none";
-
-  if (dragging && pendingSnapIndex !== null) {
-    const origin = pages.find(p => p.index === dragging.originIndex);
-    const target = pages.find(p => p.index === pendingSnapIndex);
-
-    if (origin && target && target.index !== 0) {
-      if (!target.isSplit || target.index === origin.index) {
-        const filename = origin.filename;
-        if (origin.index !== 0) origin.isSplit = false;
-        target.isSplit = true;
-        target.filename = target.filename && target.index === origin.index
-          ? target.filename
-          : filename;
+      const checkbox = document.createElement("div");
+      checkbox.className = "checkbox" + (p.checked ? " checked" : "");
+      checkbox.addEventListener("click", () => {
+        p.checked = !p.checked;
         render();
-        send();
+      });
+      wrap.appendChild(checkbox);
+
+      if (pIdxInGroup !== 0) {
+        const handle = document.createElement("div");
+        handle.className = "split-handle";
+        handle.textContent = "+";
+        handle.title = "在此新增分割點";
+        handle.addEventListener("click", () => {
+          p.isSplit = true;
+          p.filename = p.filename || `文件_${p.index + 1}`;
+          render();
+          send();
+        });
+        wrap.appendChild(handle);
       }
-    }
-  }
-  dragging = null;
-  pendingSnapIndex = null;
+
+      const card = document.createElement("div");
+      card.className = "thumb-card";
+      const img = document.createElement("img");
+      img.src = p.thumb_data_url;
+      card.appendChild(img);
+      wrap.appendChild(card);
+
+      if (pIdxInGroup === 0) {
+        wrap.appendChild(makeEditableFilenameInput(group, palette[gIdx % palette.length]));
+      }
+
+      grid.appendChild(wrap);
+    });
+  });
 }
 
 window.addEventListener("message", (event) => {
@@ -251,14 +218,15 @@ window.addEventListener("message", (event) => {
     thumb_data_url: p.thumb_data_url,
     isSplit: !!p.is_split,
     filename: p.filename || "",
+    checked: false,
   }));
 
   render();
-  setFrameHeight(720);
+  setFrameHeight(700);
 });
 
 componentReady();
-setFrameHeight(720);
+setFrameHeight(700);
 </script>
 </body>
 </html>

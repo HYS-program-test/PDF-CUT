@@ -35,8 +35,13 @@ COMPONENT_THUMB_WIDTH = 260   # 傳給拖曳元件的縮圖寬度（px），越�
 TITLE_SIZE_RATIO = 1.15
 TITLE_MAX_CHARS = 40
 
-CERT_KEYWORDS = ["登錄證書編號", "驗證登錄證書編號", "證書編號", "證書字號", "登錄字號", "登錄編號", "字號"]
-MODEL_KEYWORDS = ["室外機型號", "室外機機型", "型號", "機型", "產品型號"]
+CERT_KEYWORDS = [
+    "登錄證書編號", "驗證登錄證書編號", "商品驗證登錄證書編號", "證書編號", "證書字號",
+    "登錄字號", "登錄編號", "認證編號", "認證字號", "許可字號", "核可字號", "字號", "編號",
+]
+MODEL_KEYWORDS = [
+    "室外機型號", "室外機機型", "室內機型號", "產品型號", "商品型號", "型式", "型號", "機型",
+]
 
 # ----------------------------------------------------------------------------
 # Starbucks 風格 CSS（主頁面）
@@ -153,23 +158,36 @@ def detect_titles(doc):
     return titles
 
 
-def extract_code(full_text, keywords):
+def normalize_text(text: str) -> str:
+    """把換行/多重空白壓成單一空白，避免標籤跟數值中間隔了換行就抓不到。"""
+    return re.sub(r"\s+", " ", text)
+
+
+def extract_code(normalized_text, keywords):
     for kw in keywords:
-        pattern = re.escape(kw) + r"[\s:：\-]{0,3}([A-Za-z0-9\-\/]{4,25})"
-        m = re.search(pattern, full_text)
+        pattern = re.escape(kw) + r"[\s:：\-—－\.、]{0,6}([A-Za-z0-9][A-Za-z0-9\-\/\.]{3,24})"
+        m = re.search(pattern, normalized_text)
         if m:
-            return m.group(1).strip(" -/")
+            candidate = m.group(1).strip(" -/.")
+            if len(candidate) >= 4:
+                return candidate
     return None
 
 
-def guess_filename(doc, page_start, page_end, title_text):
-    full_text = ""
+def get_full_text(doc, page_start, page_end):
+    text = ""
     for p in range(page_start, page_end + 1):
-        full_text += doc[p].get_text()
+        text += doc[p].get_text()
+    return text
 
-    code = extract_code(full_text, CERT_KEYWORDS) or extract_code(full_text, MODEL_KEYWORDS)
+
+def guess_filename(doc, page_start, page_end, title_text):
+    full_text = get_full_text(doc, page_start, page_end)
+    normalized = normalize_text(full_text)
+
+    code = extract_code(normalized, CERT_KEYWORDS) or extract_code(normalized, MODEL_KEYWORDS)
     if not code:
-        m = re.search(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{1,})+\b", full_text)
+        m = re.search(r"\b[A-Z0-9]{2,}(?:[-\/][A-Z0-9]+){1,4}\b", normalized)
         code = m.group(0) if m else None
 
     title_clean = sanitize_filename(title_text)
@@ -274,6 +292,7 @@ if st.session_state.get("file_hash") != file_hash:
     st.session_state["total_pages"] = doc.page_count
     st.session_state["splits"] = set(splits_sorted)
     st.session_state["filenames"] = filenames
+    st.session_state["auto_titles_raw"] = dict(titles)
     st.session_state["thumbs_component"] = thumbs_component
     st.session_state["editor_revision"] = st.session_state.get("editor_revision", 0) + 1
     doc.close()
@@ -321,7 +340,19 @@ groups = build_groups(splits_sorted, total_pages)
 
 st.markdown('<div class="sb-section">分割結果預覽</div>', unsafe_allow_html=True)
 
+if st.button("🔄 依目前分割重新套用自動命名規則（型號／編號）"):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    for (start, end) in groups:
+        title_text = st.session_state["auto_titles_raw"].get(start) if "auto_titles_raw" in st.session_state else None
+        if not title_text:
+            # 沒有原始標題快取時，退回用目前檔名去掉編號部分當標題
+            title_text = re.split(r"_[A-Za-z0-9\-\/\.]{4,}$", st.session_state["filenames"].get(start, f"文件_{start+1}"))[0]
+        st.session_state["filenames"][start] = guess_filename(doc, start, end, title_text)
+    doc.close()
+    st.rerun()
+
 groups_with_names = []
+_debug_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 for (start, end) in groups:
     fname = sanitize_filename(st.session_state["filenames"].get(start, f"文件_{start+1}"))
     groups_with_names.append(((start, end), fname))
@@ -334,6 +365,10 @@ for (start, end) in groups:
         """,
         unsafe_allow_html=True,
     )
+    with st.expander(f"🔍 顯示第 {start+1}–{end+1} 頁辨識到的文字（除錯用）"):
+        raw_text = normalize_text(get_full_text(_debug_doc, start, end))
+        st.text(raw_text[:800] + ("..." if len(raw_text) > 800 else ""))
+_debug_doc.close()
 
 st.divider()
 
