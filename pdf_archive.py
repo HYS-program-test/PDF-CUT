@@ -165,10 +165,21 @@ def normalize_text(text: str) -> str:
 
 def extract_code(normalized_text, keywords):
     for kw in keywords:
-        pattern = re.escape(kw) + r"[\s:：\-—－\.、]{0,6}([A-Za-z0-9][A-Za-z0-9\-\/\.]{3,24})"
-        for m in re.finditer(pattern, normalized_text):
+        # 標籤在前：關鍵字 → 分隔符 → 數值（例如「型號：RXQ12AYLT」）
+        pattern_fwd = re.escape(kw) + r"[\s:：\-—－\.、]{0,6}([A-Za-z0-9][A-Za-z0-9\-\/\.]{3,24})"
+        for m in re.finditer(pattern_fwd, normalized_text):
             candidate = m.group(1).strip(" -/.")
-            # 真正的型號/證書編號一定含數字；純英文字（如標籤的英文對照 "Serial"）一律跳過
+            if len(candidate) >= 4 and any(ch.isdigit() for ch in candidate):
+                return candidate
+    return None
+
+
+def extract_code_reversed(normalized_text, keywords):
+    """數值在前、標籤放在後面括號裡（例如「RXQ12AYLT (室外機)」）"""
+    for kw in keywords:
+        pattern_rev = r"([A-Za-z0-9][A-Za-z0-9\-\/\.]{3,24})\s*[（(]\s*" + re.escape(kw) + r"\s*[)）]"
+        for m in re.finditer(pattern_rev, normalized_text):
+            candidate = m.group(1).strip(" -/.")
             if len(candidate) >= 4 and any(ch.isdigit() for ch in candidate):
                 return candidate
     return None
@@ -185,7 +196,13 @@ def guess_filename(doc, page_start, page_end, title_text):
     full_text = get_full_text(doc, page_start, page_end)
     normalized = normalize_text(full_text)
 
-    code = extract_code(normalized, CERT_KEYWORDS) or extract_code(normalized, MODEL_KEYWORDS)
+    reversed_keywords = ["室外機", "室內機", "型號", "機型"]
+
+    code = (
+        extract_code(normalized, CERT_KEYWORDS)
+        or extract_code(normalized, MODEL_KEYWORDS)
+        or extract_code_reversed(normalized, reversed_keywords)
+    )
     if not code:
         for m in re.finditer(r"\b[A-Z0-9]{2,}(?:[-\/][A-Z0-9]+){1,4}\b", normalized):
             candidate = m.group(0)

@@ -8,7 +8,7 @@
   --bg: #eef1fb;
   --card: #ffffff;
   --border: #e3e7f5;
-  --plus-blue: #6f8cf0;
+  --line: #c6a664;
   --text: #2c2f45;
   --muted: #8b8fa3;
 }
@@ -16,7 +16,7 @@ html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;b
 .hint{font-size:12px;color:var(--muted);padding:6px 4px 10px 4px}
 
 #stage{
-  overflow-y:auto; height:640px; border-radius:12px; padding:20px 16px;
+  overflow-y:auto; height:640px; border-radius:12px; padding:20px 16px; position:relative;
 }
 
 #grid{
@@ -37,20 +37,39 @@ html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;b
 
 .thumb-wrap:not(.group-start) .thumb-card{ cursor:pointer; }
 .thumb-wrap:not(.group-start) .thumb-card:hover{
-  border-color:var(--plus-blue);
-  box-shadow:0 0 0 2px rgba(111,140,240,0.35);
+  border-color:var(--line);
+  box-shadow:0 0 0 2px rgba(198,166,100,0.35);
 }
 
-.group-gap{
-  width:44px; display:flex; align-items:center; justify-content:center;
-  align-self:center; margin-bottom:26px; flex:0 0 auto;
+.group-divider{
+  width:26px; align-self:stretch; min-height:180px; display:flex;
+  align-items:center; justify-content:center; position:relative;
+  margin-bottom:26px; flex:0 0 auto;
 }
-.merge-btn{
-  width:30px; height:30px; border-radius:50%; background:var(--plus-blue); color:#fff;
-  border:none; font-size:18px; font-weight:700; cursor:pointer; line-height:1;
-  box-shadow:0 2px 8px rgba(111,140,240,0.4);
+.divider-line{
+  width:0; height:100%; border-left:3px dashed var(--line);
 }
-.merge-btn:hover{ background:#5474e0; }
+.divider-handle{
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:22px; height:22px; border-radius:50%; background:#fff;
+  border:2px solid var(--line); color:var(--line);
+  display:flex; align-items:center; justify-content:center;
+  font-size:12px; cursor:grab; user-select:none; z-index:4;
+  box-shadow:0 2px 6px rgba(0,0,0,0.12);
+}
+.divider-handle:active{ cursor:grabbing; }
+.divider-handle .x{
+  position:absolute; top:-26px; left:50%; transform:translateX(-50%);
+  width:18px; height:18px; border-radius:50%; background:#fff; color:#a33;
+  border:1px solid #e2b8b8; font-size:11px; line-height:16px; text-align:center;
+  display:none;
+}
+.group-divider:hover .divider-handle .x{ display:block; }
+
+#draghint{
+  position:absolute; width:0; border-left:3px dashed var(--line);
+  pointer-events:none; display:none; z-index:10; top:0;
+}
 
 .pill-block{ margin-top:8px; }
 .pill{
@@ -70,9 +89,10 @@ html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;b
 </head>
 <body>
 
-<div class="hint">同一份文件的頁面會緊貼在一起；直接點擊縮圖可切換該頁是否為新文件起點；文件間的藍色 ＋ 可合併（取消分割）；標籤可直接點擊修改檔名。</div>
+<div class="hint">直接點縮圖：切換該頁是否為新文件起點。虛線把手：拖曳可移動分割點，點把手上方的 × 可刪除該分割點。標籤可直接點擊修改檔名。</div>
 <div id="stage">
   <div id="grid"></div>
+  <div id="draghint"></div>
 </div>
 
 <script>
@@ -86,7 +106,12 @@ function setComponentValue(value) { postToStreamlit("streamlit:setComponentValue
 function setFrameHeight(height = 700) { postToStreamlit("streamlit:setFrameHeight", { height }); }
 
 let pages = [];        // [{index, thumb_data_url, isSplit, filename}]
+let dragging = null;
+let pendingTargetIndex = null;
+
+const stage = document.getElementById("stage");
 const grid = document.getElementById("grid");
+const draghint = document.getElementById("draghint");
 
 function send() {
   const splits = pages
@@ -136,19 +161,35 @@ function render() {
 
   groups.forEach((group, gIdx) => {
     if (gIdx !== 0) {
-      const gap = document.createElement("div");
-      gap.className = "group-gap";
-      const btn = document.createElement("button");
-      btn.className = "merge-btn";
-      btn.textContent = "+";
-      btn.title = "點擊合併（取消此處分割）";
-      btn.addEventListener("click", () => {
-        group.pages[0].isSplit = false;
+      const divider = document.createElement("div");
+      divider.className = "group-divider";
+      divider.dataset.index = group.startIndex;
+
+      const line = document.createElement("div");
+      line.className = "divider-line";
+      divider.appendChild(line);
+
+      const handle = document.createElement("div");
+      handle.className = "divider-handle";
+      handle.textContent = "⠿";
+      handle.dataset.index = group.startIndex;
+      handle.addEventListener("mousedown", onHandleMouseDown);
+
+      const xBtn = document.createElement("div");
+      xBtn.className = "x";
+      xBtn.textContent = "×";
+      xBtn.title = "刪除此分割點";
+      xBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const target = pages.find(pg => pg.index === group.startIndex);
+        if (target) target.isSplit = false;
         render();
         send();
       });
-      gap.appendChild(btn);
-      grid.appendChild(gap);
+      handle.appendChild(xBtn);
+
+      divider.appendChild(handle);
+      grid.appendChild(divider);
     }
 
     group.pages.forEach((p, pIdxInGroup) => {
@@ -181,6 +222,67 @@ function render() {
       grid.appendChild(wrap);
     });
   });
+}
+
+function thumbRects() {
+  return Array.from(grid.querySelectorAll(".thumb-wrap")).map(el => {
+    const r = el.getBoundingClientRect();
+    return { index: Number(el.dataset.index), cx: r.left, cy: r.top + r.height / 2, top: r.top, left: r.left };
+  });
+}
+
+function onHandleMouseDown(e) {
+  const originIndex = Number(e.currentTarget.dataset.index);
+  dragging = { originIndex };
+  pendingTargetIndex = null;
+  draghint.style.display = "block";
+  document.addEventListener("mousemove", onDragMove);
+  document.addEventListener("mouseup", onDragEnd);
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function onDragMove(e) {
+  if (!dragging) return;
+  const rects = thumbRects().filter(r => r.index !== 0);
+  if (!rects.length) return;
+
+  let nearest = rects[0];
+  let best = Infinity;
+  rects.forEach(r => {
+    const d = Math.hypot(r.cx - e.clientX, r.cy - e.clientY);
+    if (d < best) { best = d; nearest = r; }
+  });
+  pendingTargetIndex = nearest.index;
+
+  const stageRect = stage.getBoundingClientRect();
+  draghint.style.left = `${nearest.left - stageRect.left + stage.scrollLeft - 4}px`;
+  draghint.style.top = `${nearest.top - stageRect.top + stage.scrollTop}px`;
+  draghint.style.height = "210px";
+}
+
+function onDragEnd() {
+  document.removeEventListener("mousemove", onDragMove);
+  document.removeEventListener("mouseup", onDragEnd);
+  draghint.style.display = "none";
+
+  if (dragging && pendingTargetIndex !== null) {
+    const origin = pages.find(p => p.index === dragging.originIndex);
+    const target = pages.find(p => p.index === pendingTargetIndex);
+
+    if (origin && target && target.index !== 0) {
+      if (!target.isSplit || target.index === origin.index) {
+        const filename = origin.filename;
+        if (origin.index !== 0) origin.isSplit = false;
+        target.isSplit = true;
+        target.filename = target.index === origin.index ? (target.filename || filename) : filename;
+        render();
+        send();
+      }
+    }
+  }
+  dragging = null;
+  pendingTargetIndex = null;
 }
 
 window.addEventListener("message", (event) => {
