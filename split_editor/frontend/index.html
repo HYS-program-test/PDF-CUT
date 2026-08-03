@@ -5,18 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
 :root {
-  --bg: #eef1fb;
-  --card: #ffffff;
-  --border: #e3e7f5;
-  --line: #c6a664;
-  --text: #2c2f45;
-  --muted: #8b8fa3;
+  --white: #ffffff;
+  --bg: #F7F9F8;
+  --green: #00704A;
+  --green-dark: #045C3C;
+  --green-pale: #EAF5EF;
+  --border: #E3E8E5;
+  --text: #1F2A24;
+  --muted: #7C8880;
+  --danger: #B3453B;
 }
-html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;background:var(--bg);color:var(--text)}
-.hint{font-size:12px;color:var(--muted);padding:6px 4px 10px 4px}
+html,body{margin:0;padding:0;font-family:-apple-system,"Microsoft JhengHei",Arial,sans-serif;background:var(--white);color:var(--text)}
+.hint{font-size:12px;color:var(--muted);padding:6px 4px 12px 4px;line-height:1.6}
 
 #stage{
-  overflow-y:auto; height:640px; border-radius:12px; padding:20px 16px; position:relative;
+  background:var(--bg);
+  border-radius:14px;
+  padding:20px 16px;
 }
 
 #grid{
@@ -29,16 +34,16 @@ html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;b
 .thumb-wrap.group-start{ margin-left:14px; }
 
 .thumb-card{
-  background:var(--card); border:1px solid var(--border); border-radius:8px;
-  box-shadow:0 3px 10px rgba(44,47,69,0.08); overflow:hidden; cursor:default;
+  background:var(--white); border:1px solid var(--border); border-radius:10px;
+  box-shadow:0 2px 8px rgba(31,42,36,0.06); overflow:hidden; cursor:default;
   transition: border-color .12s, box-shadow .12s;
 }
 .thumb-card img{ display:block; width:100%; height:auto; }
 
 .thumb-wrap:not(.group-start) .thumb-card{ cursor:pointer; }
 .thumb-wrap:not(.group-start) .thumb-card:hover{
-  border-color:var(--line);
-  box-shadow:0 0 0 2px rgba(198,166,100,0.35);
+  border-color:var(--green);
+  box-shadow:0 0 0 2px rgba(0,112,74,0.25);
 }
 
 .group-divider{
@@ -46,53 +51,98 @@ html,body{margin:0;padding:0;font-family:Arial,"Microsoft JhengHei",sans-serif;b
   align-items:center; justify-content:center; position:relative;
   margin-bottom:26px; flex:0 0 auto;
 }
-.divider-line{
-  width:0; height:100%; border-left:3px dashed var(--line);
-}
+.divider-line{ width:0; height:100%; border-left:3px dashed var(--green); }
 .divider-handle{
   position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-  width:22px; height:22px; border-radius:50%; background:#fff;
-  border:2px solid var(--line); color:var(--line);
+  width:22px; height:22px; border-radius:50%; background:var(--white);
+  border:2px solid var(--green); color:var(--green);
   display:flex; align-items:center; justify-content:center;
   font-size:12px; cursor:grab; user-select:none; z-index:4;
-  box-shadow:0 2px 6px rgba(0,0,0,0.12);
+  box-shadow:0 2px 6px rgba(0,0,0,0.1);
 }
 .divider-handle:active{ cursor:grabbing; }
 .divider-handle .x{
   position:absolute; top:-26px; left:50%; transform:translateX(-50%);
-  width:18px; height:18px; border-radius:50%; background:#fff; color:#a33;
+  width:18px; height:18px; border-radius:50%; background:var(--white); color:var(--danger);
   border:1px solid #e2b8b8; font-size:11px; line-height:16px; text-align:center;
   display:none;
 }
 .group-divider:hover .divider-handle .x{ display:block; }
 
 #draghint{
-  position:absolute; width:0; border-left:3px dashed var(--line);
+  position:absolute; width:0; border-left:3px dashed var(--green);
   pointer-events:none; display:none; z-index:10; top:0;
 }
 
 .pill-block{ margin-top:8px; }
 .pill{
   display:inline-block; max-width:150px; font-size:12px; font-weight:600;
-  padding:4px 10px; border-radius:999px; color:#3b3f57; border:none;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:130px;
+  padding:4px 10px; border-radius:999px; color:var(--green-dark); border:1px solid var(--green);
+  background:var(--green-pale);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:128px;
 }
 .page-count{ font-size:11px; color:var(--muted); margin-top:3px; padding-left:2px; }
+.debug-toggle{
+  font-size:10px; color:var(--muted); cursor:pointer; margin-top:2px; padding-left:2px;
+  text-decoration:underline; user-select:none;
+}
+.debug-text{
+  display:none; font-size:11px; color:var(--muted); background:var(--white);
+  border:1px solid var(--border); border-radius:6px; padding:6px 8px; margin-top:4px;
+  width:180px; max-height:120px; overflow-y:auto; white-space:pre-wrap; line-height:1.5;
+}
+.debug-text.open{ display:block; }
 
-.palette-0 .pill{ background:#fbdce6; }
-.palette-1 .pill{ background:#fdeecb; }
-.palette-2 .pill{ background:#cdeef0; }
-.palette-3 .pill{ background:#e5dcf7; }
-.palette-4 .pill{ background:#d8e6fb; }
-.palette-5 .pill{ background:#d9f3df; }
+#result-section{
+  margin-top:8px;
+  padding-top:20px;
+  border-top:1px solid var(--border);
+}
+#result-title{
+  font-weight:700; font-size:15px; color:var(--text); margin-bottom:12px;
+}
+.result-card{
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--white); border:1px solid var(--border); border-left:4px solid var(--green);
+  border-radius:8px; padding:10px 14px; margin-bottom:8px;
+}
+.result-card .fname{ font-weight:600; font-size:13px; color:var(--text); }
+.result-card .pages{ font-size:11px; color:var(--muted); margin-top:2px; }
+
+#action-row{
+  margin-top:20px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+}
+.btn{
+  border:none; border-radius:999px; padding:10px 26px; font-size:14px; font-weight:700;
+  cursor:pointer; transition:background .12s;
+}
+.btn-primary{ background:var(--green); color:var(--white); }
+.btn-primary:hover{ background:var(--green-dark); }
+.btn-primary:disabled{ background:#a9c9bd; cursor:default; }
+.btn-download{
+  background:var(--green-dark); color:var(--white); text-decoration:none;
+  display:inline-flex; align-items:center; padding:10px 26px; border-radius:999px;
+  font-size:14px; font-weight:700;
+}
+.status-text{ font-size:12px; color:var(--muted); }
 </style>
 </head>
 <body>
 
-<div class="hint">直接點縮圖：切換該頁是否為新文件起點。虛線把手：拖曳可移動分割點，點把手上方的 × 可刪除該分割點。標籤可直接點擊修改檔名。</div>
+<div class="hint">直接點縮圖：切換該頁是否為新文件起點。虛線把手：拖曳可移動分割點，點把手上方的 × 可刪除該分割點。標籤可直接點擊修改檔名，標籤下方「查看文字」可展開辨識到的原始內容（除錯用）。</div>
 <div id="stage">
   <div id="grid"></div>
   <div id="draghint"></div>
+</div>
+
+<div id="result-section">
+  <div id="result-title">分割結果預覽</div>
+  <div id="result-list"></div>
+  <div id="action-row">
+    <button class="btn btn-primary" id="confirm-btn">✅ 確認分割並產生壓縮檔</button>
+    <span class="status-text" id="status-text"></span>
+    <a class="btn-download" id="download-link" style="display:none" download="split_documents.zip">⬇️ 下載分割後的壓縮檔</a>
+  </div>
 </div>
 
 <script>
@@ -103,22 +153,32 @@ function postToStreamlit(type, payload = {}) {
 }
 function componentReady() { postToStreamlit("streamlit:componentReady", { apiVersion: 1 }); }
 function setComponentValue(value) { postToStreamlit("streamlit:setComponentValue", { value }); }
-function setFrameHeight(height = 700) { postToStreamlit("streamlit:setFrameHeight", { height }); }
+function setFrameHeight(height = 900) { postToStreamlit("streamlit:setFrameHeight", { height }); }
 
-let pages = [];        // [{index, thumb_data_url, isSplit, filename}]
+let pages = [];        // [{index, thumb_data_url, isSplit, filename, text}]
 let dragging = null;
 let pendingTargetIndex = null;
+let confirmNonceCounter = 0;
 
 const stage = document.getElementById("stage");
 const grid = document.getElementById("grid");
 const draghint = document.getElementById("draghint");
+const resultList = document.getElementById("result-list");
+const confirmBtn = document.getElementById("confirm-btn");
+const statusText = document.getElementById("status-text");
+const downloadLink = document.getElementById("download-link");
 
-function send() {
+function send(action) {
   const splits = pages
     .filter(p => p.isSplit)
     .map(p => ({ index: p.index, filename: p.filename }))
     .sort((a, b) => a.index - b.index);
-  setComponentValue({ splits });
+  const payload = { splits, action: action || null };
+  if (action === "confirm") {
+    confirmNonceCounter += 1;
+    payload.nonce = confirmNonceCounter;
+  }
+  setComponentValue(payload);
 }
 
 function groupsFromPages() {
@@ -133,16 +193,25 @@ function groupsFromPages() {
   return groups;
 }
 
-function makeEditableFilenameInput(group, paletteClass) {
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s || "";
+  return d.innerHTML;
+}
+
+function makeEditableFilenameInput(group) {
   const wrap = document.createElement("div");
-  wrap.className = `pill-block ${paletteClass}`;
+  wrap.className = "pill-block";
 
   const input = document.createElement("input");
   input.className = "pill";
   input.type = "text";
   input.value = group.pages[0].filename || "";
   input.title = input.value;
-  input.addEventListener("input", (e) => { group.pages[0].filename = e.target.value; });
+  input.addEventListener("input", (e) => {
+    group.pages[0].filename = e.target.value;
+    renderResultList();
+  });
   input.addEventListener("change", () => send());
   wrap.appendChild(input);
 
@@ -151,13 +220,25 @@ function makeEditableFilenameInput(group, paletteClass) {
   count.textContent = `${group.pages.length} 頁`;
   wrap.appendChild(count);
 
+  const toggle = document.createElement("div");
+  toggle.className = "debug-toggle";
+  toggle.textContent = "🔍 查看辨識文字";
+  const debugBox = document.createElement("div");
+  debugBox.className = "debug-text";
+  const combinedText = group.pages.map(p => p.text || "").join(" ").replace(/\s+/g, " ").trim();
+  debugBox.textContent = combinedText ? combinedText.slice(0, 600) : "（無文字）";
+  toggle.addEventListener("click", () => {
+    debugBox.classList.toggle("open");
+  });
+  wrap.appendChild(toggle);
+  wrap.appendChild(debugBox);
+
   return wrap;
 }
 
 function render() {
   grid.innerHTML = "";
   const groups = groupsFromPages();
-  const palette = ["palette-0", "palette-1", "palette-2", "palette-3", "palette-4", "palette-5"];
 
   groups.forEach((group, gIdx) => {
     if (gIdx !== 0) {
@@ -216,11 +297,34 @@ function render() {
       wrap.appendChild(card);
 
       if (pIdxInGroup === 0) {
-        wrap.appendChild(makeEditableFilenameInput(group, palette[gIdx % palette.length]));
+        wrap.appendChild(makeEditableFilenameInput(group));
       }
 
       grid.appendChild(wrap);
     });
+  });
+
+  renderResultList();
+  setFrameHeight(Math.max(900, document.body.scrollHeight));
+}
+
+function renderResultList() {
+  const groups = groupsFromPages();
+  resultList.innerHTML = "";
+  groups.forEach(group => {
+    const start = group.startIndex;
+    const end = group.pages[group.pages.length - 1].index;
+    const fname = (group.pages[0].filename || `文件_${start + 1}`).trim();
+
+    const card = document.createElement("div");
+    card.className = "result-card";
+    card.innerHTML = `
+      <div>
+        <div class="fname">📄 ${escapeHtml(fname)}.pdf</div>
+        <div class="pages">第 ${start + 1} 頁 – 第 ${end + 1} 頁（共 ${end - start + 1} 頁）</div>
+      </div>
+    `;
+    resultList.appendChild(card);
   });
 }
 
@@ -285,6 +389,13 @@ function onDragEnd() {
   pendingTargetIndex = null;
 }
 
+confirmBtn.addEventListener("click", () => {
+  statusText.textContent = "分割中，請稍候...";
+  downloadLink.style.display = "none";
+  confirmBtn.disabled = true;
+  send("confirm");
+});
+
 window.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || data.type !== RENDER_EVENT || !data.args) return;
@@ -295,14 +406,27 @@ window.addEventListener("message", (event) => {
     thumb_data_url: p.thumb_data_url,
     isSplit: !!p.is_split,
     filename: p.filename || "",
+    text: p.text || "",
   }));
 
   render();
-  setFrameHeight(700);
+
+  confirmBtn.disabled = false;
+  if (args.download_data_url) {
+    statusText.textContent = "完成！";
+    downloadLink.href = args.download_data_url;
+    downloadLink.download = args.download_filename || "split_documents.zip";
+    downloadLink.style.display = "inline-flex";
+  } else {
+    statusText.textContent = "";
+    downloadLink.style.display = "none";
+  }
+
+  setFrameHeight(Math.max(900, document.body.scrollHeight));
 });
 
 componentReady();
-setFrameHeight(700);
+setFrameHeight(900);
 </script>
 </body>
 </html>

@@ -54,51 +54,39 @@ MODEL_KEYWORDS = [
 ]
 
 # ----------------------------------------------------------------------------
-# Starbucks 風格 CSS（主頁面）
+# 白底綠色點綴風格 CSS（主頁面外殼；主要畫面內容已改用自訂元件 split_editor 渲染）
 # ----------------------------------------------------------------------------
-STARBUCKS_CSS = """
+APP_CSS = """
 <style>
 :root {
-    --sb-green: #00704A;
-    --sb-green-dark: #063528;
-    --sb-cream: #F2EFE4;
-    --sb-gold: #C6A664;
-    --sb-white: #FFFFFF;
+    --app-green: #00704A;
+    --app-green-dark: #045C3C;
+    --app-bg: #F7F9F8;
+    --app-white: #FFFFFF;
 }
-.stApp { background-color: var(--sb-cream); }
+.stApp { background-color: var(--app-white); }
 [data-testid="stSidebar"] {
-    background: var(--sb-white);
-    border-right: 1px solid rgba(0,112,74,0.15);
+    background: var(--app-bg);
+    border-right: 1px solid rgba(0,112,74,0.12);
 }
 [data-testid="stSidebar"] h3 {
-    color: var(--sb-green-dark);
-    font-family: 'Georgia', serif;
+    color: var(--app-green-dark);
 }
-.sb-header {
-    background: linear-gradient(135deg, var(--sb-green-dark) 0%, var(--sb-green) 100%);
-    padding: 28px 36px; border-radius: 14px; margin-bottom: 24px;
-    box-shadow: 0 6px 18px rgba(6, 53, 40, 0.25);
+.app-header {
+    background: var(--app-white);
+    border: 1px solid rgba(0,112,74,0.15);
+    padding: 24px 32px; border-radius: 14px; margin-bottom: 20px;
 }
-.sb-header h1 { color: var(--sb-white); font-family: 'Georgia', serif; font-size: 30px; margin: 0 0 4px 0; letter-spacing: 1px; }
-.sb-header p { color: var(--sb-gold); margin: 0; font-size: 14px; letter-spacing: 0.5px; }
-.sb-section {
-    color: var(--sb-green-dark); font-family: 'Georgia', serif; font-weight: 700; font-size: 20px;
-    border-left: 6px solid var(--sb-gold); padding-left: 12px; margin: 22px 0 14px 0;
-}
-.sb-doc-card {
-    background: var(--sb-white); border-left: 6px solid var(--sb-green); border-radius: 8px;
-    padding: 12px 16px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(6,53,40,0.08);
-}
-.sb-doc-card .fname { color: var(--sb-green-dark); font-weight: 700; font-size: 15px; }
-.sb-doc-card .pages { color: #7a7a7a; font-size: 12px; }
+.app-header h1 { color: var(--app-green-dark); font-size: 28px; margin: 0 0 4px 0; }
+.app-header p { color: #6b7a72; margin: 0; font-size: 14px; }
 div.stButton > button, div.stDownloadButton > button {
-    background-color: var(--sb-green) !important; color: var(--sb-white) !important;
+    background-color: var(--app-green) !important; color: var(--app-white) !important;
     border-radius: 999px !important; border: none !important; padding: 8px 22px !important; font-weight: 700 !important;
 }
-div.stButton > button:hover, div.stDownloadButton > button:hover { background-color: var(--sb-green-dark) !important; }
+div.stButton > button:hover, div.stDownloadButton > button:hover { background-color: var(--app-green-dark) !important; }
 </style>
 """
-st.markdown(STARBUCKS_CSS, unsafe_allow_html=True)
+st.markdown(APP_CSS, unsafe_allow_html=True)
 
 
 # ----------------------------------------------------------------------------
@@ -477,8 +465,8 @@ def split_pdf_to_zip(pdf_bytes, groups_with_names):
 # ----------------------------------------------------------------------------
 st.markdown(
     """
-    <div class="sb-header">
-        <h1>☕ PDF拆分工具</h1>
+    <div class="app-header">
+        <h1>PDF拆分工具</h1>
         <p>一次掃描多份文件 → 自動判斷標題分頁 → 拖曳調整 → 自動命名 → 打包下載</p>
     </div>
     """,
@@ -544,13 +532,22 @@ total_pages = st.session_state["total_pages"]
 thumbs_component = st.session_state["thumbs_component"]
 
 ocr_note = "（本檔案沒有文字層，已透過 Claude API OCR 辨識）" if st.session_state.get("used_ocr") else ""
-st.success(f"共 {total_pages} 頁，系統自動偵測到 {len(st.session_state['splits'])} 份文件（可拖曳虛線調整）。{ocr_note}")
+st.caption(f"共 {total_pages} 頁，系統自動偵測到 {len(st.session_state['splits'])} 份文件。{ocr_note}")
+
+if st.button("🔄 依目前分割重新套用自動命名規則（型號／編號）"):
+    splits_sorted_now = sorted(st.session_state["splits"])
+    groups_now = build_groups(splits_sorted_now, total_pages)
+    for (start, end) in groups_now:
+        title_text = st.session_state["auto_titles_raw"].get(start) if "auto_titles_raw" in st.session_state else None
+        if not title_text:
+            title_text = re.split(r"_[A-Za-z0-9\-\/\.]{4,}$", st.session_state["filenames"].get(start, f"文件_{start+1}"))[0]
+        st.session_state["filenames"][start] = guess_filename(start, end, title_text)
+    st.rerun()
 
 # ----------------------------------------------------------------------------
-# 拖曳式分割線編輯器
+# 主畫面：拖曳分割、結果預覽、確認、下載——全部在同一個自訂元件裡
 # ----------------------------------------------------------------------------
-st.markdown('<div class="sb-section">頁面預覽與分割點調整</div>', unsafe_allow_html=True)
-
+page_texts_cache = st.session_state.get("page_texts", {})
 pages_payload = []
 for idx in range(total_pages):
     is_split = idx in st.session_state["splits"]
@@ -559,11 +556,16 @@ for idx in range(total_pages):
         "thumb_data_url": thumbs_component[idx],
         "is_split": is_split,
         "filename": st.session_state["filenames"].get(idx, f"文件_{idx+1}") if is_split else "",
+        "text": normalize_text(page_texts_cache.get(idx, ""))[:1500],
     })
+
+download_data_url = st.session_state.get("download_data_url")
 
 editor_value = split_editor(
     pages=pages_payload,
     revision=st.session_state["editor_revision"],
+    download_data_url=download_data_url,
+    download_filename="split_documents.zip",
     key="pdf_split_editor_main",
 )
 
@@ -573,55 +575,26 @@ if isinstance(editor_value, dict) and "splits" in editor_value:
     new_filenames = {item["index"]: item["filename"] for item in editor_value["splits"]}
     if 0 not in new_filenames:
         new_filenames[0] = st.session_state["filenames"].get(0, "文件_1")
+
+    splits_changed = new_splits != st.session_state["splits"] or new_filenames != st.session_state["filenames"]
     st.session_state["splits"] = new_splits
     st.session_state["filenames"] = new_filenames
 
-# ----------------------------------------------------------------------------
-# 分件結果預覽
-# ----------------------------------------------------------------------------
-splits_sorted = sorted(st.session_state["splits"])
-groups = build_groups(splits_sorted, total_pages)
+    if splits_changed:
+        # 分割設定變了，先前產生的下載檔已經過期
+        st.session_state["download_data_url"] = None
 
-st.markdown('<div class="sb-section">分割結果預覽</div>', unsafe_allow_html=True)
-
-if st.button("🔄 依目前分割重新套用自動命名規則（型號／編號）"):
-    for (start, end) in groups:
-        title_text = st.session_state["auto_titles_raw"].get(start) if "auto_titles_raw" in st.session_state else None
-        if not title_text:
-            # 沒有原始標題快取時，退回用目前檔名去掉編號部分當標題
-            title_text = re.split(r"_[A-Za-z0-9\-\/\.]{4,}$", st.session_state["filenames"].get(start, f"文件_{start+1}"))[0]
-        st.session_state["filenames"][start] = guess_filename(start, end, title_text)
-    st.rerun()
-
-groups_with_names = []
-for (start, end) in groups:
-    fname = sanitize_filename(st.session_state["filenames"].get(start, f"文件_{start+1}"))
-    groups_with_names.append(((start, end), fname))
-    st.markdown(
-        f"""
-        <div class="sb-doc-card">
-            <div class="fname">📄 {fname}.pdf</div>
-            <div class="pages">第 {start+1} 頁 – 第 {end+1} 頁（共 {end-start+1} 頁）</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.expander(f"🔍 顯示第 {start+1}–{end+1} 頁辨識到的文字（除錯用）"):
-        raw_text = normalize_text(get_cached_text(start, end))
-        st.text(raw_text[:800] + ("..." if len(raw_text) > 800 else ""))
-
-st.divider()
-
-if st.button("✅ 確認分割並產生壓縮檔", type="primary"):
-    with st.spinner("分割中，請稍候..."):
-        zip_bytes = split_pdf_to_zip(pdf_bytes, groups_with_names)
-    st.session_state["zip_bytes"] = zip_bytes
-    st.success("分割完成！請點選下方按鈕下載壓縮檔（瀏覽器安全限制，需手動點擊一次）。")
-
-if st.session_state.get("zip_bytes"):
-    st.download_button(
-        "⬇️ 下載分割後的 PDF 壓縮檔 (zip)",
-        data=st.session_state["zip_bytes"],
-        file_name="split_documents.zip",
-        mime="application/zip",
-    )
+    if editor_value.get("action") == "confirm":
+        nonce = editor_value.get("nonce")
+        if nonce is not None and nonce != st.session_state.get("last_confirm_nonce"):
+            st.session_state["last_confirm_nonce"] = nonce
+            splits_sorted_now = sorted(st.session_state["splits"])
+            groups_now = build_groups(splits_sorted_now, total_pages)
+            groups_with_names = [
+                ((start, end), sanitize_filename(st.session_state["filenames"].get(start, f"文件_{start+1}")))
+                for (start, end) in groups_now
+            ]
+            zip_bytes = split_pdf_to_zip(pdf_bytes, groups_with_names)
+            zip_b64 = base64.b64encode(zip_bytes).decode("ascii")
+            st.session_state["download_data_url"] = f"data:application/zip;base64,{zip_b64}"
+            st.rerun()
