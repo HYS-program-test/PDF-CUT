@@ -1,5 +1,5 @@
 """
-PDF 掃描檔自動分割工具（Starbucks 風格）
+PDF拆分工具（Starbucks 風格）
 =====================================
 掃描機一次掃入多份文件（30~50 頁）時，依「標題行」（字型較大 / 上下留白的單獨一行）
 自動判斷分割點，切成多份 PDF；分割線可用滑鼠拖曳調整（自訂元件，架構比照
@@ -32,7 +32,7 @@ from split_editor import split_editor
 # ----------------------------------------------------------------------------
 # 基本設定
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title="PDF 自動分割工具", page_icon="☕", layout="wide")
+st.set_page_config(page_title="PDF拆分工具", page_icon="☕", layout="wide")
 
 FULL_ZOOM = 1.3              # 用來產生「最終分割」PDF 判讀時的縮圖解析度（不影響分割本身）
 COMPONENT_THUMB_WIDTH = 260   # 傳給拖曳元件的縮圖寬度（px），越小 payload 越輕
@@ -66,6 +66,14 @@ STARBUCKS_CSS = """
     --sb-white: #FFFFFF;
 }
 .stApp { background-color: var(--sb-cream); }
+[data-testid="stSidebar"] {
+    background: var(--sb-white);
+    border-right: 1px solid rgba(0,112,74,0.15);
+}
+[data-testid="stSidebar"] h3 {
+    color: var(--sb-green-dark);
+    font-family: 'Georgia', serif;
+}
 .sb-header {
     background: linear-gradient(135deg, var(--sb-green-dark) 0%, var(--sb-green) 100%);
     padding: 28px 36px; border-radius: 14px; margin-bottom: 24px;
@@ -100,6 +108,25 @@ def sanitize_filename(name: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]+', "_", name)
     name = re.sub(r"\s+", " ", name).strip()
     return name[:80] if name else "未命名文件"
+
+
+# 已知文件標題 → 固定編號前綴（存檔時加在標題前面，標題後面的型號/編號關鍵字照舊保留）
+TITLE_PREFIX_MAP = [
+    ("商品驗證登錄申請書", "00_01"),
+    ("公司營利事業登記證", "00_02"),
+    ("ISO證書", "00_03"),
+    ("符合型式聲明書", "00_07"),
+    ("RoHS切結書", "07_01"),
+    ("商品標籤及商品檢驗標識", "07_02"),
+    ("樣張及其標示位置", "07_03"),
+]
+
+
+def apply_title_prefix(title: str) -> str:
+    for keyword, prefix in TITLE_PREFIX_MAP:
+        if keyword in title:
+            return f"{prefix} {title}"
+    return title
 
 
 def extract_page_lines(page):
@@ -345,7 +372,9 @@ def guess_filename(page_start, page_end, title_text):
                 code = candidate
                 break
 
-    title_clean = sanitize_filename(strip_english_subtitle(title_text))
+    title_clean = strip_english_subtitle(title_text)
+    title_clean = apply_title_prefix(title_clean)
+    title_clean = sanitize_filename(title_clean)
     if code:
         return sanitize_filename(f"{title_clean}_{code}")
     return title_clean
@@ -411,17 +440,19 @@ def split_pdf_to_zip(pdf_bytes, groups_with_names):
 st.markdown(
     """
     <div class="sb-header">
-        <h1>☕ PDF 掃描檔自動分割工具</h1>
+        <h1>☕ PDF拆分工具</h1>
         <p>一次掃描多份文件 → 自動判斷標題分頁 → 拖曳調整 → 自動命名 → 打包下載</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-uploaded = st.file_uploader("上傳掃描 PDF（可能包含 30~50 頁、多份文件）", type=["pdf"])
+with st.sidebar:
+    st.markdown("### 上傳")
+    uploaded = st.file_uploader("上傳掃描 PDF（可能包含 30~50 頁、多份文件）", type=["pdf"])
 
 if uploaded is None:
-    st.info("請上傳掃描後的 PDF 檔案，系統會自動偵測每份文件的標題並建議分割點。")
+    st.info("請從左側上傳掃描後的 PDF 檔案，系統會自動偵測每份文件的標題並建議分割點。")
     st.stop()
 
 pdf_bytes = uploaded.read()
