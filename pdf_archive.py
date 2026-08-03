@@ -123,8 +123,9 @@ TITLE_PREFIX_MAP = [
 
 
 def apply_title_prefix(title: str) -> str:
+    compact_title = re.sub(r"\s+", "", title)
     for keyword, prefix in TITLE_PREFIX_MAP:
-        if keyword in title:
+        if keyword in compact_title:
             return f"{prefix} {title}"
     return title
 
