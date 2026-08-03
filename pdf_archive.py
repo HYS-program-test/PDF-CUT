@@ -130,6 +130,18 @@ def apply_title_prefix(title: str) -> str:
     return title
 
 
+# 這些是「附件延續頁」的抬頭，就算本身有粗體/置中的標題樣式，也不算新文件起點
+# （它們是前一份文件的附表/清單，應該跟前面同一份文件合併，不要單獨拆開）
+TITLE_EXCLUDE_KEYWORDS = [
+    "系列型號清單", "附表", "試驗報告清單",
+]
+
+
+def is_excluded_title(title: str) -> bool:
+    compact = re.sub(r"\s+", "", title or "")
+    return any(kw in compact for kw in TITLE_EXCLUDE_KEYWORDS)
+
+
 def extract_page_lines(page):
     lines_info = []
     d = page.get_text("dict")
@@ -256,7 +268,7 @@ def ocr_all_pages(doc, client, model=OCR_MODEL, progress_cb=None):
             except Exception as e:
                 is_title, title, full_text = (i == 0), f"文件_{i+1}", f"[OCR 失敗：{e}]"
             page_texts[i] = full_text
-            if is_title and title:
+            if is_title and title and not is_excluded_title(title):
                 titles[i] = title
             done += 1
             if progress_cb:
@@ -302,7 +314,7 @@ def detect_titles(doc):
             if score > best_score:
                 best_score = score
                 best = text
-        if best is not None and best_score >= 2:
+        if best is not None and best_score >= 2 and not is_excluded_title(best):
             titles[page_idx] = best
 
     if 0 not in titles:
