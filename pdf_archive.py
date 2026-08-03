@@ -45,8 +45,9 @@ OCR_MAX_WORKERS = 4           # 同時呼叫 Claude API 的併發數
 TEXT_LAYER_MIN_CHARS = 20     # 判斷「有無文字層」的粗略門檻
 
 CERT_KEYWORDS = [
-    "登錄證書編號", "驗證登錄證書編號", "商品驗證登錄證書編號", "證書編號", "證書字號",
-    "登錄字號", "登錄編號", "認證編號", "認證字號", "許可字號", "核可字號",
+    "登錄證書編號", "驗證登錄證書編號", "商品驗證登錄證書編號", "證書編號", "證書字號", "證書號碼",
+    "登錄字號", "登錄編號", "登錄號碼", "認證編號", "認證字號", "認證號碼",
+    "許可字號", "核可字號", "核准字號",
 ]
 MODEL_KEYWORDS = [
     "室外機型號", "室外機機型", "室內機型號", "產品型號", "商品型號", "型號", "機型",
@@ -170,8 +171,13 @@ OCR_PROMPT = (
     '{"is_title_page": true 或 false, "title": "...", "full_text": "..."}\n\n'
     "- is_title_page：這一頁最上方是否有明顯的文件標題／抬頭（通常字體較大、置中或單獨一行，"
     "例如公文、證書、聲明書的標題文字）。每一頁都要獨立判斷，不用跟其他頁比較。\n"
-    "- title：如果 is_title_page 為 true，填入該標題文字；否則填空字串。\n"
-    "- full_text：盡可能完整轉錄這一頁上所有看得到的文字內容，中英文都要，包含表格內的文字。"
+    "- title：如果 is_title_page 為 true，填入該頁的標題文字。規則如下：\n"
+    "  · 如果標題只有一種語言（例如整份文件的標題本來就只有英文，沒有中文），就直接填那個語言的標題文字。\n"
+    "  · 如果同一個標題同時有中文主標題跟英文翻譯副標兩行（例如中文字體較大在上、英文字體較小在下作為翻譯），"
+    "則優先只填中文主標題，不要把英文翻譯行加進來。\n"
+    "  · 如果 is_title_page 為 false，這欄填空字串。\n"
+    "- full_text：盡可能完整轉錄這一頁上所有看得到的文字內容，中英文都要，包含表格內的文字（這一項要完整，"
+    "不要因為上面 title 的規則而省略內文的英文，只有 title 欄位才需要排除英文翻譯行）。"
 )
 
 
@@ -305,6 +311,21 @@ def get_cached_text(page_start, page_end):
     return "".join(page_texts.get(p, "") for p in range(page_start, page_end + 1))
 
 
+def strip_english_subtitle(title: str) -> str:
+    """
+    標題若含中文、後面又接了一段英文翻譯副標（例如「符合型式聲明書 Declaration of Conformity to Type」），
+    只保留中文主標題。純英文標題（沒有中文）則不處理，避免誤傷。
+    """
+    if not title:
+        return title
+    if not re.search(r"[\u4e00-\u9fff]", title):
+        return title
+    m = re.search(r"[A-Za-z]{3,}", title)
+    if m and m.start() > 0:
+        return title[:m.start()].strip(" 　:：-—")
+    return title
+
+
 def guess_filename(page_start, page_end, title_text):
     full_text = get_cached_text(page_start, page_end)
     normalized = normalize_text(full_text)
@@ -319,11 +340,12 @@ def guess_filename(page_start, page_end, title_text):
     if not code:
         for m in re.finditer(r"\b[A-Z0-9]{2,}(?:[-\/][A-Z0-9]+){1,4}\b", normalized):
             candidate = m.group(0)
-            if any(ch.isdigit() for ch in candidate):
+            # 真正的型號/證書編號一定含英文字母；純數字（例如電話號碼、日期）一律跳過
+            if any(ch.isdigit() for ch in candidate) and any(ch.isalpha() for ch in candidate):
                 code = candidate
                 break
 
-    title_clean = sanitize_filename(title_text)
+    title_clean = sanitize_filename(strip_english_subtitle(title_text))
     if code:
         return sanitize_filename(f"{title_clean}_{code}")
     return title_clean
