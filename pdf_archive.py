@@ -13,15 +13,19 @@ floorplan_editor：純手刻 postMessage 協議，無需 npm/React build），
 
 import base64
 import io
+import json
+import os
 import re
 import zipfile
 import statistics
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
 import fitz  # PyMuPDF
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
+from anthropic import Anthropic
 
 from split_editor import split_editor
 
@@ -34,6 +38,11 @@ FULL_ZOOM = 1.3              # 用來產生「最終分割」PDF 判讀時的縮
 COMPONENT_THUMB_WIDTH = 260   # 傳給拖曳元件的縮圖寬度（px），越小 payload 越輕
 TITLE_SIZE_RATIO = 1.15
 TITLE_MAX_CHARS = 40
+
+OCR_MODEL = "claude-sonnet-5"
+OCR_ZOOM = 2.0                # OCR 用的圖片解析度（越高辨識越準，但越慢/越貴）
+OCR_MAX_WORKERS = 4           # 同時呼叫 Claude API 的併發數
+TEXT_LAYER_MIN_CHARS = 20     # 判斷「有無文字層」的粗略門檻
 
 CERT_KEYWORDS = [
     "登錄證書編號", "驗證登錄證書編號", "商品驗證登錄證書編號", "證書編號", "證書字號",
@@ -114,6 +123,117 @@ def extract_page_lines(page):
     return lines_info
 
 
+def normalize_text(text: str) -> str:
+    """把換行/多重空白壓成單一空白，避免標籤跟數值中間隔了換行就抓不到。"""
+    return re.sub(r"\s+", " ", text)
+
+
+# ----------------------------------------------------------------------------
+# OCR（給沒有文字層的純掃描圖片 PDF 用，透過 Claude API Vision）
+# ----------------------------------------------------------------------------
+def get_anthropic_client():
+    api_key = None
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY")
+    except Exception:
+        api_key = None
+    if not api_key:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        st.error(
+            "找不到 ANTHROPIC_API_KEY。請到 Streamlit Cloud 的 "
+            "Manage app → Settings → Secrets 加入：\n\nANTHROPIC_API_KEY = \"你的金鑰\""
+        )
+        st.stop()
+    return Anthropic(api_key=api_key)
+
+
+def page_has_text_layer(doc, sample_pages=3) -> bool:
+    total_chars = 0
+    for i in range(min(sample_pages, doc.page_count)):
+        total_chars += len(doc[i].get_text().strip())
+    return total_chars > TEXT_LAYER_MIN_CHARS
+
+
+def render_page_jpeg_b64(page, zoom=OCR_ZOOM, quality=85) -> str:
+    mat = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat)
+    png_bytes = pix.tobytes("png")
+    im = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=quality)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+OCR_PROMPT = (
+    "請分析這張掃描文件頁面的圖片，只回傳 JSON（不要任何其他文字、不要 markdown 語法），格式如下：\n"
+    '{"is_title_page": true 或 false, "title": "...", "full_text": "..."}\n\n'
+    "- is_title_page：這一頁最上方是否有明顯的文件標題／抬頭（通常字體較大、置中或單獨一行，"
+    "例如公文、證書、聲明書的標題文字）。每一頁都要獨立判斷，不用跟其他頁比較。\n"
+    "- title：如果 is_title_page 為 true，填入該標題文字；否則填空字串。\n"
+    "- full_text：盡可能完整轉錄這一頁上所有看得到的文字內容，中英文都要，包含表格內的文字。"
+)
+
+
+def ocr_page_with_claude(client, img_b64, model=OCR_MODEL):
+    response = client.messages.create(
+        model=model,
+        max_tokens=2000,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}},
+                {"type": "text", "text": OCR_PROMPT},
+            ],
+        }],
+    )
+    raw = "".join(block.text for block in response.content if block.type == "text").strip()
+    raw = re.sub(r"^```(json)?", "", raw).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {"is_title_page": False, "title": "", "full_text": raw}
+    return (
+        bool(data.get("is_title_page")),
+        str(data.get("title") or ""),
+        str(data.get("full_text") or ""),
+    )
+
+
+def ocr_all_pages(doc, client, model=OCR_MODEL, progress_cb=None):
+    """回傳 (titles_dict, page_texts_dict)"""
+    n = doc.page_count
+    img_b64_list = [render_page_jpeg_b64(doc[i]) for i in range(n)]
+
+    titles = {}
+    page_texts = {i: "" for i in range(n)}
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=OCR_MAX_WORKERS) as executor:
+        future_to_idx = {
+            executor.submit(ocr_page_with_claude, client, img_b64_list[i], model): i
+            for i in range(n)
+        }
+        for future in as_completed(future_to_idx):
+            i = future_to_idx[future]
+            try:
+                is_title, title, full_text = future.result()
+            except Exception as e:
+                is_title, title, full_text = (i == 0), f"文件_{i+1}", f"[OCR 失敗：{e}]"
+            page_texts[i] = full_text
+            if is_title and title:
+                titles[i] = title
+            done += 1
+            if progress_cb:
+                progress_cb(done, n)
+
+    if 0 not in titles:
+        titles[0] = page_texts.get(0, "文件")[:TITLE_MAX_CHARS] or "文件"
+
+    return titles, page_texts
+
+
 def detect_titles(doc):
     all_sizes = []
     per_page_lines = []
@@ -158,11 +278,6 @@ def detect_titles(doc):
     return titles
 
 
-def normalize_text(text: str) -> str:
-    """把換行/多重空白壓成單一空白，避免標籤跟數值中間隔了換行就抓不到。"""
-    return re.sub(r"\s+", " ", text)
-
-
 def extract_code(normalized_text, keywords):
     for kw in keywords:
         # 標籤在前：關鍵字 → 分隔符 → 數值（例如「型號：RXQ12AYLT」）
@@ -185,15 +300,13 @@ def extract_code_reversed(normalized_text, keywords):
     return None
 
 
-def get_full_text(doc, page_start, page_end):
-    text = ""
-    for p in range(page_start, page_end + 1):
-        text += doc[p].get_text()
-    return text
+def get_cached_text(page_start, page_end):
+    page_texts = st.session_state.get("page_texts", {})
+    return "".join(page_texts.get(p, "") for p in range(page_start, page_end + 1))
 
 
-def guess_filename(doc, page_start, page_end, title_text):
-    full_text = get_full_text(doc, page_start, page_end)
+def guess_filename(page_start, page_end, title_text):
+    full_text = get_cached_text(page_start, page_end)
     normalized = normalize_text(full_text)
 
     reversed_keywords = ["室外機", "室內機", "型號", "機型"]
@@ -295,14 +408,33 @@ file_hash = hashlib.md5(pdf_bytes).hexdigest()
 if st.session_state.get("file_hash") != file_hash:
     st.session_state["file_hash"] = file_hash
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    titles = detect_titles(doc)
+
+    has_text = page_has_text_layer(doc)
+    st.session_state["used_ocr"] = not has_text
+
+    if has_text:
+        titles = detect_titles(doc)
+        page_texts = {i: doc[i].get_text() for i in range(doc.page_count)}
+    else:
+        st.info("偵測到這是純掃描圖片 PDF（沒有文字層），改用 Claude API 進行 OCR 辨識，請稍候...")
+        client = get_anthropic_client()
+        progress_bar = st.progress(0.0, text=f"OCR 辨識中... 0/{doc.page_count} 頁")
+
+        def _progress_cb(done, total):
+            progress_bar.progress(done / total, text=f"OCR 辨識中... {done}/{total} 頁")
+
+        titles, page_texts = ocr_all_pages(doc, client, progress_cb=_progress_cb)
+        progress_bar.empty()
+
+    st.session_state["page_texts"] = page_texts
+
     splits_sorted = sorted(titles.keys())
     groups = build_groups(splits_sorted, doc.page_count)
 
     filenames = {}
     for (start, end) in groups:
         title_text = titles.get(start, f"文件_{start+1}")
-        filenames[start] = guess_filename(doc, start, end, title_text)
+        filenames[start] = guess_filename(start, end, title_text)
 
     thumbs_component = [
         to_data_url(resize_png_bytes(render_thumb_png(page, 0.9), COMPONENT_THUMB_WIDTH))
@@ -320,7 +452,8 @@ if st.session_state.get("file_hash") != file_hash:
 total_pages = st.session_state["total_pages"]
 thumbs_component = st.session_state["thumbs_component"]
 
-st.success(f"共 {total_pages} 頁，系統自動偵測到 {len(st.session_state['splits'])} 份文件（可拖曳虛線調整）。")
+ocr_note = "（本檔案沒有文字層，已透過 Claude API OCR 辨識）" if st.session_state.get("used_ocr") else ""
+st.success(f"共 {total_pages} 頁，系統自動偵測到 {len(st.session_state['splits'])} 份文件（可拖曳虛線調整）。{ocr_note}")
 
 # ----------------------------------------------------------------------------
 # 拖曳式分割線編輯器
@@ -361,18 +494,15 @@ groups = build_groups(splits_sorted, total_pages)
 st.markdown('<div class="sb-section">分割結果預覽</div>', unsafe_allow_html=True)
 
 if st.button("🔄 依目前分割重新套用自動命名規則（型號／編號）"):
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for (start, end) in groups:
         title_text = st.session_state["auto_titles_raw"].get(start) if "auto_titles_raw" in st.session_state else None
         if not title_text:
             # 沒有原始標題快取時，退回用目前檔名去掉編號部分當標題
             title_text = re.split(r"_[A-Za-z0-9\-\/\.]{4,}$", st.session_state["filenames"].get(start, f"文件_{start+1}"))[0]
-        st.session_state["filenames"][start] = guess_filename(doc, start, end, title_text)
-    doc.close()
+        st.session_state["filenames"][start] = guess_filename(start, end, title_text)
     st.rerun()
 
 groups_with_names = []
-_debug_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 for (start, end) in groups:
     fname = sanitize_filename(st.session_state["filenames"].get(start, f"文件_{start+1}"))
     groups_with_names.append(((start, end), fname))
@@ -386,9 +516,8 @@ for (start, end) in groups:
         unsafe_allow_html=True,
     )
     with st.expander(f"🔍 顯示第 {start+1}–{end+1} 頁辨識到的文字（除錯用）"):
-        raw_text = normalize_text(get_full_text(_debug_doc, start, end))
+        raw_text = normalize_text(get_cached_text(start, end))
         st.text(raw_text[:800] + ("..." if len(raw_text) > 800 else ""))
-_debug_doc.close()
 
 st.divider()
 
